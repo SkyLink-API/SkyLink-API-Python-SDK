@@ -1,0 +1,77 @@
+{
+  "origin": "LHR",
+  "destination": "JFK",
+  "date": "2026-05-01",
+  "passengers": 1,
+  "count": 3,
+  "flights": [
+    {
+      "price_usd": 542.0,
+      "original_price": 498.0,
+      "original_currency": "EUR",
+      "total_duration_min": 465,
+      "stops": 0,
+      "legs": [
+        {
+          "flight_number": "BA117",
+          "airline": "British Airways",
+          "airline_code": "BA",
+          "departure_airport": "LHR",
+          "departure_airport_name": "London Heathrow Airport",
+          "arrival_airport": "JFK",
+          "arrival_airport_name": "John F Kennedy International Airport",
+          "departure_time": "09:00",
+          "arrival_time": "11:45",
+          "departure_datetime": "2026-05-01T09:00:00",
+          "arrival_datetime": "2026-05-01T11:45:00",
+          "duration_min": 465
+        }
+      ],
+      "layovers": null
+    },
+    {
+      "price_usd": 398.0,
+      "original_price": 367.0,
+      "original_currency": "EUR",
+      "total_duration_min": 680,
+      "stops": 1,
+      "legs": [
+        {
+          "flight_number": "IB3163",
+          "airline": "Iberia",
+          "airline_code": "IB",
+          "departure_airport": "LHR",
+          "departure_airport_name": "London Heathrow Airport",
+          "arrival_airport": "MAD",
+          "arrival_airport_name": "Adolfo Suárez Madrid–Barajas Airport",
+          "departure_time": "07:15",
+          "arrival_time": "10:30",
+          "departure_datetime": "2026-05-01T07:15:00",
+          "arrival_datetime": "2026-05-01T10:30:00",
+          "duration_min": 135
+        },
+        {
+          "flight_number": "IB6251",
+          "airline": "Iberia",
+          "airline_code": "IB",
+          "departure_airport": "MAD",
+          "departure_airport_name": "Adolfo Suárez Madrid–Barajas Airport",
+          "arrival_airport": "JFK",
+          "arrival_airport_name": "John F Kennedy International Airport",
+          "departure_time": "13:05",
+          "arrival_time": "16:15",
+          "departure_datetime": "2026-05-01T13:05:00",
+          "arrival_datetime": "2026-05-01T16:15:00",
+          "duration_min": 490
+        }
+      ],
+      "layovers": [
+        {
+          "airport": "MAD",
+          "airport_name": "Adolfo Suárez Madrid–Barajas Airport",
+          "duration_min": 155
+        }
+      ]
+    }
+  ]
+}

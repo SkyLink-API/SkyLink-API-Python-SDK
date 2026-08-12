@@ -1,0 +1,20 @@
+{
+  "detail": [
+    {
+      "loc": [
+        "query",
+        "lat"
+      ],
+      "msg": "Input should be less than or equal to 90",
+      "type": "less_than_equal"
+    },
+    {
+      "loc": [
+        "query",
+        "icao24"
+      ],
+      "msg": "Field required",
+      "type": "missing"
+    }
+  ]
+}

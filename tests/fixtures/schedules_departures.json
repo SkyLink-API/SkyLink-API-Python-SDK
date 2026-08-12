@@ -1,0 +1,18 @@
+{
+  "iata": "MXP",
+  "direction": "departures",
+  "airport_code": "LIMC",
+  "flights": [
+    {
+      "Time": "16:05",
+      "Date": "11 Feb",
+      "IATA": "ICN",
+      "Destination": "Seoul",
+      "Flight": "C84093",
+      "Airline": "Federal Airlines",
+      "Status": "Estimated 16:39"
+    }
+  ],
+  "total_flights": 85,
+  "pages_fetched": 3
+}

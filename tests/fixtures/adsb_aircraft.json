@@ -1,0 +1,40 @@
+{
+  "aircraft": [
+    {
+      "icao24": "4ca1fb",
+      "callsign": "BAW117",
+      "latitude": 51.47,
+      "longitude": -0.4543,
+      "altitude": 36000,
+      "ground_speed": 452.5,
+      "track": 287.3,
+      "vertical_rate": 0,
+      "is_on_ground": false,
+      "last_seen": "2026-02-11T12:00:03.412870",
+      "first_seen": "2026-02-11T11:42:18.004512",
+      "registration": "G-STBA",
+      "aircraft_type": "B77W",
+      "airline": "British Airways",
+      "photo_url": "https://cdn.jetphotos.com/full/6/12345_1600000000.jpg"
+    },
+    {
+      "icao24": "a1b2c3",
+      "callsign": null,
+      "latitude": null,
+      "longitude": null,
+      "altitude": null,
+      "ground_speed": null,
+      "track": null,
+      "vertical_rate": null,
+      "is_on_ground": null,
+      "last_seen": "2026-02-11T11:59:51.998001",
+      "first_seen": "2026-02-11T11:59:12.110447",
+      "registration": null,
+      "aircraft_type": null,
+      "airline": null,
+      "photo_url": null
+    }
+  ],
+  "total_count": 2,
+  "timestamp": "2026-02-11T12:00:04.881233"
+}

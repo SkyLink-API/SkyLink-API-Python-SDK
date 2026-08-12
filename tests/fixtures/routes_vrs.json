@@ -1,0 +1,13 @@
+{
+  "callsign": "BAW117",
+  "callsign_prefix": "BAW",
+  "airline_code": "BA",
+  "departure_icao": "EGLL",
+  "arrival_icao": "KJFK",
+  "airports": [
+    "EGLL",
+    "KJFK"
+  ],
+  "confidence": "high",
+  "source": "vrs"
+}

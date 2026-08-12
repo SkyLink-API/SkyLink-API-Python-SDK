@@ -1,0 +1,101 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "skylink-api"
+dynamic = ["version"]
+description = "Official Python SDK for the SkyLink API — aviation data: live ADS-B, weather, airports, charts, NOTAMs, flight status and more."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "SkyLink API", email = "support@skylinkapi.com" }]
+keywords = [
+    "skylink",
+    "aviation",
+    "adsb",
+    "metar",
+    "taf",
+    "notam",
+    "flight-tracking",
+    "airports",
+    "aviation-weather",
+    "api-client",
+    "sdk",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+    "Typing :: Typed",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+]
+dependencies = ["httpx>=0.25,<1", "pydantic>=2.5,<3"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "build>=1.2",
+    "twine>=5.0",
+]
+
+[project.urls]
+Homepage = "https://skylinkapi.com"
+Documentation = "https://skylinkapi.com/docs"
+Repository = "https://github.com/skylinkapi/Python-SDK-"
+Changelog = "https://github.com/skylinkapi/Python-SDK-/blob/main/CHANGELOG.md"
+Issues = "https://github.com/skylinkapi/Python-SDK-/issues"
+
+[tool.hatch.version]
+path = "src/skylink_api/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/skylink_api"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/examples", "/README.md", "/CHANGELOG.md", "/LICENSE"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "B008",   # function call in default argument — not applicable, but noisy with sentinels
+    "RUF001", # ambiguous unicode in docstrings (aviation symbols)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unreachable = true
+files = ["src/skylink_api"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+strict = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q --strict-markers"
+markers = [
+    "integration: hits a live SkyLink API instance; requires SKYLINK_TEST_BASE_URL",
+]

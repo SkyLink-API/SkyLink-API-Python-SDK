@@ -1,0 +1,61 @@
+{
+  "flight_id": "7f3c1a54-9d2e-4b8f-a1c6-2e5b7d0f9a13",
+  "icao24": "4CA1FB",
+  "callsign": "BAW117",
+  "registration": "G-STBA",
+  "aircraft_type_icao": "B77W",
+  "departure_airport_icao": "EGLL",
+  "departure_airport_iata": "LHR",
+  "arrival_airport_icao": "KJFK",
+  "arrival_airport_iata": "JFK",
+  "takeoff_time": "2026-02-10T08:55:02+00:00",
+  "landing_time": "2026-02-10T16:19:44+00:00",
+  "count": 3,
+  "positions": [
+    {
+      "timestamp": "2026-02-10T16:19:40+00:00",
+      "icao24": "4ca1fb",
+      "latitude": 40.6421,
+      "longitude": -73.7801,
+      "altitude_baro": 0,
+      "ground_speed": 12.5,
+      "track": 43.2,
+      "vertical_rate": 0,
+      "callsign": "BAW117",
+      "is_on_ground": true,
+      "registration": "G-STBA",
+      "aircraft_type": "B77W",
+      "gps_spoofed": false
+    },
+    {
+      "timestamp": "2026-02-10T12:41:15+00:00",
+      "icao24": "4ca1fb",
+      "latitude": 52.1183,
+      "longitude": -33.4021,
+      "altitude_baro": 37000,
+      "ground_speed": 481.0,
+      "track": 271.8,
+      "vertical_rate": 0,
+      "callsign": "BAW117",
+      "is_on_ground": false,
+      "registration": "G-STBA",
+      "aircraft_type": "B77W",
+      "gps_spoofed": false
+    },
+    {
+      "timestamp": "2026-02-10T08:55:05+00:00",
+      "icao24": "4ca1fb",
+      "latitude": 51.4706,
+      "longitude": -0.4619,
+      "altitude_baro": null,
+      "ground_speed": null,
+      "track": null,
+      "vertical_rate": null,
+      "callsign": null,
+      "is_on_ground": true,
+      "registration": null,
+      "aircraft_type": null,
+      "gps_spoofed": false
+    }
+  ]
+}

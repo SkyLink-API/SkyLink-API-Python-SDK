@@ -1,0 +1,13 @@
+{
+  "id": "0a4f9c2e-7b31-4d85-9f60-31c8a2b7e410",
+  "url": "https://hooks.example.com/skylink",
+  "event_types": [
+    "status_changed",
+    "flight_delayed"
+  ],
+  "filters": {
+    "flight_number": "BA117"
+  },
+  "active": true,
+  "created_at": "2026-02-11T12:00:00+00:00"
+}

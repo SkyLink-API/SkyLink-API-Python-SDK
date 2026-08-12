@@ -1,0 +1,5 @@
+{
+  "error": "Unauthorized",
+  "message": "Access to SkyLink API is available exclusively through api.market and RapidAPI.",
+  "code": "MARKETPLACE_ACCESS_REQUIRED"
+}

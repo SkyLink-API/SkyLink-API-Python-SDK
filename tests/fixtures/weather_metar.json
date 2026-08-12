@@ -1,0 +1,6 @@
+{
+  "raw": "METAR KJFK 271851Z 16013KT 10SM FEW024 15/09 A3020 RMK AO2 SLP216 T01500089",
+  "icao": "KJFK",
+  "airport_name": "John F Kennedy International Airport",
+  "timestamp": "2025-09-27T12:00:00Z"
+}

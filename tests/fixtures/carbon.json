@@ -1,0 +1,23 @@
+{
+  "departure_icao": "EGLL",
+  "arrival_icao": "KJFK",
+  "aircraft_type": "B77W",
+  "aircraft_category": "widebody",
+  "distance_km": 5555.1,
+  "distance_nm": 2999.5,
+  "passengers": 396,
+  "passengers_source": "category_default",
+  "co2_kg_total": 205538.7,
+  "co2_kg_per_passenger": 519.0,
+  "rfi_applied": false,
+  "rfi_factor": 1.9,
+  "co2_equivalent_kg_total": null,
+  "co2_equivalent_kg_per_passenger": null,
+  "methodology": "ICAO-Doc9988",
+  "confidence": "high",
+  "distance_source": "haversine",
+  "notes": "CO2 only. Add include_rfi=true for total climate impact estimate.",
+  "callsign": "BAW117",
+  "callsign_resolved": true,
+  "route_confidence": "high"
+}

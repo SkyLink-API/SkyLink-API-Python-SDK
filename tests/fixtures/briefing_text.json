@@ -1,0 +1,12 @@
+{
+  "origin": "KJFK",
+  "destination": "EGLL",
+  "format": "markdown",
+  "briefing": "<h2>Summary</h2> VFR conditions at KJFK (John F Kennedy International Airport) with clear skies, visibility 10 statute miles, and light winds from the northwest at 8 knots. EGLL (London Heathrow Airport) is reporting MVFR with broken clouds at 3,000 feet and visibility 2.5 statute miles in light rain. No critical restrictions at either airport. Winds aloft favor a standard North Atlantic track routing. <hr> <h3>Critical Operational Restrictions</h3> No critical restrictions identified. <hr> <h3>Origin: KJFK</h3> <h4>Current Weather</h4> VFR. Visibility 10 statute miles. Few clouds at 25,000 feet. Wind from 310 degrees at 8 knots. Temperature 8°C, dewpoint -6°C. Altimeter 30.12 inHg. No significant weather. <h4>Forecast</h4> Winds remaining from the northwest at 10 knots through the forecast period. Visibility greater than 6 statute miles. Few high clouds. No precipitation expected. <h4>NOTAMs</h4> <li><strong>TWY B:</strong> Taxiway B between A and C closed for maintenance. Use Taxiway D as alternate. Valid until Feb 20 at 18:00 UTC. <hr> <h3>Destination: EGLL</h3> <h4>Current Weather</h4> MVFR. Visibility 4,000 meters (2.5 statute miles) in light rain. Broken clouds at 3,000 feet. Wind from 240 degrees at 12 knots. Temperature 6°C, dewpoint 4°C. Altimeter 1023 hPa. <h4>Forecast</h4> Winds from 240 degrees at 15 knots. Visibility 5,000 meters in light rain. Broken clouds at 2,500 feet. Conditions expected to remain MVFR through the period. <h4>NOTAMs</h4> No active NOTAMs.",
+  "data_included": [
+    "metar",
+    "taf",
+    "notams"
+  ],
+  "disclaimer": "This briefing is AI-generated and for informational purposes only. Always verify with official sources before flight operations."
+}

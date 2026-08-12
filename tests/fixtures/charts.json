@@ -1,0 +1,22 @@
+{
+  "icao_code": "KJFK",
+  "source": "faa",
+  "charts": {
+    "GND": [
+      {
+        "name": "KJFK - Airport Diagram",
+        "url": "https://...",
+        "category": "GND"
+      }
+    ],
+    "SID": [
+      {
+        "name": "KENNEDY TWO",
+        "url": "https://...",
+        "category": "SID"
+      }
+    ]
+  },
+  "total_count": 42,
+  "fetched_at": "2026-02-11T12:00:00Z"
+}

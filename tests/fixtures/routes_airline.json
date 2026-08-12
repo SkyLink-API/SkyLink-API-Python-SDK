@@ -1,0 +1,28 @@
+{
+  "callsign_prefix": "BAW",
+  "airline_code": "BA",
+  "airline_name": "British Airways",
+  "routes": [
+    {
+      "src": "LHR",
+      "dst": "JFK",
+      "km": 5555,
+      "duration_min": 445
+    },
+    {
+      "src": "LHR",
+      "dst": "CDG",
+      "km": 348,
+      "duration_min": 80
+    },
+    {
+      "src": "LGW",
+      "dst": "MCO",
+      "km": 6944,
+      "duration_min": 560
+    }
+  ],
+  "total_routes": 412,
+  "confidence": "low",
+  "source": "airline_routes"
+}

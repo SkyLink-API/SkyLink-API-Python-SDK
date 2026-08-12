@@ -1,0 +1,27 @@
+{
+  "flight_number": "BA 123",
+  "airline": "British Airways",
+  "status": "En Route",
+  "departure": {
+    "airport": "EGLL",
+    "airport_full": "London Heathrow Airport",
+    "scheduled_time": "10:30",
+    "scheduled_date": "11 Feb",
+    "actual_time": "10:35",
+    "actual_date": "11 Feb",
+    "terminal": "5",
+    "gate": "A12",
+    "checkin": ""
+  },
+  "arrival": {
+    "airport": "KJFK",
+    "airport_full": "John F Kennedy International Airport",
+    "scheduled_time": "14:45",
+    "scheduled_date": "11 Feb",
+    "estimated_time": "14:50",
+    "estimated_date": "11 Feb",
+    "terminal": "7",
+    "gate": "B15",
+    "baggage": ""
+  }
+}

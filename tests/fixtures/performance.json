@@ -1,0 +1,14 @@
+{
+  "icao_type": "B77W",
+  "name": "BOEING 777-300ER",
+  "engine_type": "Jet",
+  "engine_code": "L2J",
+  "wake_category": "H",
+  "cruise_speed_ktas": 490,
+  "service_ceiling_ft": 43000,
+  "max_range_nm": 7370,
+  "wing_span_m": 64.8,
+  "length_m": 73.9,
+  "mtow_t": 351.5,
+  "max_passengers": 396
+}

@@ -1,0 +1,18 @@
+{
+  "icao": "OMDB",
+  "notams": [
+    {
+      "raw": "A2161/26 NOTAMN\nQ) OMAE/QMRLC/IV/NBO/A/000/999/2515N05521E005\nA) OMDB B) 2607162130 C) 2607302215\nE) RWY 12L/30R CLSD",
+      "notam_id": "A2161/2026",
+      "notam_id_domestic": "07/2161",
+      "type": "N",
+      "location": "OMDB",
+      "effective": "202607162130",
+      "expiration": "202607302215",
+      "body": "RWY 12L/30R CLSD",
+      "qline": "OMAE/QMRLC/IV/NBO/A/000/999/2515N05521E005",
+      "scope": "AERODROME"
+    }
+  ],
+  "total": 1
+}

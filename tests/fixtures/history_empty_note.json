@@ -1,0 +1,13 @@
+{
+  "filters": {
+    "icao24": null,
+    "registration": "G-ZZZZ",
+    "resolved_icao24": null,
+    "callsign": null,
+    "departure_icao": null,
+    "arrival_icao": null
+  },
+  "count": 0,
+  "flights": [],
+  "note": "Registration 'G-ZZZZ' not found in aircraft database."
+}

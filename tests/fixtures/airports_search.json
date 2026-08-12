@@ -1,0 +1,43 @@
+{
+  "id": 3682,
+  "ident": "KJFK",
+  "type": "large_airport",
+  "name": "John F Kennedy International Airport",
+  "latitude_deg": 40.63980103,
+  "longitude_deg": -73.77890015,
+  "elevation_ft": 13,
+  "continent": "NA",
+  "iso_country": "US",
+  "iso_region": "US-NY",
+  "municipality": "New York",
+  "scheduled_service": "yes",
+  "gps_code": "KJFK",
+  "iata_code": "JFK",
+  "local_code": "JFK",
+  "runways": [
+    {
+      "length_ft": 14511,
+      "width_ft": 150,
+      "surface": "ASP",
+      "lighted": "1",
+      "closed": "0",
+      "le_ident": "04L",
+      "he_ident": "22R"
+    }
+  ],
+  "frequencies": [
+    {
+      "type": "TWR",
+      "description": "JFK TWR",
+      "frequency_mhz": "119.1"
+    }
+  ],
+  "navaids": [
+    {
+      "ident": "JFK",
+      "name": "Kennedy",
+      "type": "VOR-DME",
+      "frequency_khz": "115900"
+    }
+  ]
+}

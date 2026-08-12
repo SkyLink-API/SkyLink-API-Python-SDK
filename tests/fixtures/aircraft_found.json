@@ -1,0 +1,24 @@
+{
+  "query": "G-STBA",
+  "found": true,
+  "aircraft": {
+    "registration": "G-STBA",
+    "icao24": "4CA1FB",
+    "icao_type": "B77W",
+    "type_name": "Boeing 777-336(ER)",
+    "manufacturer": "Boeing",
+    "manufacturer_and_model": "Boeing 777-336(ER)",
+    "owner_operator": "British Airways",
+    "airline_code": "BAW",
+    "is_private_operator": false,
+    "serial_number": "38593",
+    "year_built": "2010",
+    "photos": [
+      {
+        "image": "https://cdn.jetphotos.com/full/6/12345_1600000000.jpg",
+        "link": "https://www.jetphotos.com/photo/12345",
+        "photographer": "Jane Doe"
+      }
+    ]
+  }
+}
