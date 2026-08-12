@@ -18,8 +18,21 @@ or cache still warming) or ``404`` (nothing for this identifier right now).
 Those are correct API behaviour, so they skip with an explanatory message
 instead of failing — see :func:`tests.integration.conftest.tolerating`.
 
+Both channels are worth a run: they differ in more than the host — quota header
+names, the shape of a 404 for an unrouted path, and which endpoints the plan
+allows (see :mod:`tests.integration.test_live_webhooks`).
+
 Run with::
 
+    # RapidAPI channel (the SDK default)
+    SKYLINK_TEST_API_KEY=...msh...jsn... \
+        ./.venv/Scripts/python.exe -m pytest tests/integration -v
+
+    # direct channel, with a direct (Polar licence) key
+    SKYLINK_TEST_PROVIDER=direct SKYLINK_TEST_API_KEY=... \
+        ./.venv/Scripts/python.exe -m pytest tests/integration -v
+
+    # or a staging deployment
     SKYLINK_TEST_BASE_URL=http://localhost:8081/v3.1 \
         ./.venv/Scripts/python.exe -m pytest tests/integration -v
 """
@@ -54,6 +67,7 @@ from skylink_api import (
     MetarWithParsed,
     NavaidsResponse,
     NotamsResponse,
+    NotFoundError,
     SkyLink,
     TicketSearchResponse,
     VrsRouteResult,
@@ -62,7 +76,7 @@ from skylink_api import (
     WebhookToggleResponse,
 )
 
-from .conftest import ARMED, PLAN_ERRORS, SKIP_REASON, tolerating
+from .conftest import ARMED, BASE_URL, PLAN_ERRORS, PROVIDER, SKIP_REASON, tolerating
 
 pytestmark = [
     pytest.mark.integration,
@@ -535,21 +549,62 @@ async def test_async_client_smoke(async_sky: AsyncSkyLink) -> None:
         assert result.total == len(result.countries)
 
 
+# ── channel behaviour ────────────────────────────────────────────────────────
+
+
+def test_unknown_endpoint_is_a_parsed_not_found(sky: SkyLink) -> None:
+    """An unrouted path is a ``NotFoundError`` with a real message on either channel.
+
+    The channels disagree about *who* answers and in what words — the direct
+    gateway proxies through to FastAPI (``{"detail": "Not Found"}``), while the
+    RapidAPI edge rejects the path itself before the backend sees it
+    (``{"message": "Endpoint '/...' does not exist"}``, and no quota is spent).
+    The SDK has to normalise both, so the assertion is that the message survived
+    rather than degrading to the bare ``HTTP 404`` fallback.
+    """
+
+    with pytest.raises(NotFoundError) as excinfo:
+        sky.request("GET", "/there-is-no-such-endpoint")
+
+    error = excinfo.value
+    assert error.status_code == 404
+    assert error.message and error.message != "HTTP 404", (
+        f"the 404 body was not parsed into a message: {error.body!r}"
+    )
+
+
 # ── rate limit headers ───────────────────────────────────────────────────────
 
 
 def test_rate_limit_headers_are_captured(sky: SkyLink) -> None:
-    """``client.last_rate_limit`` mirrors ``X-RateLimit-Requests-*`` when sent.
+    """``client.last_rate_limit`` reflects whatever quota headers the channel sends.
 
-    Staging with ``DISABLE_AUTH=true`` sends no quota headers, so the attribute
-    staying ``None`` is a valid outcome; what must never happen is a crash while
-    reading it.
+    The two channels spell them differently — ``X-RateLimit-Requests-*`` on
+    RapidAPI, ``X-RateLimit-*`` on the direct gateway (and on the wire the direct
+    one arrives as ``X-Ratelimit-Limit``) — so a parser that knows only one of
+    them leaves ``last_rate_limit`` at ``None`` on the other channel, and with it
+    both quota hooks silently dead. Against a production channel the attribute is
+    therefore **required**, not merely tolerated; only a custom ``base_url``
+    (staging behind neither gateway) is allowed to send nothing.
     """
 
     with tolerating("geo.countries (quota headers)"):
         sky.geo.countries()
 
     quota = sky.last_rate_limit
-    if quota is not None:
-        assert quota.limit is None or quota.limit >= 0
-        assert quota.remaining is None or quota.remaining >= 0
+
+    if BASE_URL:
+        # Staging with ``DISABLE_AUTH=true`` injects no quota headers at all; what
+        # must never happen is a crash while reading the attribute.
+        if quota is not None:
+            assert quota.limit is None or quota.limit >= 0
+            assert quota.remaining is None or quota.remaining >= 0
+        return
+
+    assert quota is not None, (
+        f"the {PROVIDER} gateway sends quota headers on every response; "
+        "last_rate_limit staying None means the SDK did not recognise them"
+    )
+    assert quota.limit is not None and quota.limit > 0
+    assert quota.remaining is not None and 0 <= quota.remaining <= quota.limit
+    assert quota.reset is not None and quota.reset >= 0

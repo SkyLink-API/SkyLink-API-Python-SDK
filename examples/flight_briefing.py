@@ -7,7 +7,7 @@ binary endpoint and hands back ``bytes``.
 
 Run it with a key in the environment::
 
-    export SKYLINK_API_KEY=sk_live_...
+    export RAPIDAPI_KEY=...msh...jsn...   # or SKYLINK_API_KEY with provider="direct"
     python examples/flight_briefing.py
 """
 
@@ -90,7 +90,7 @@ def save_pdf(sky: SkyLink) -> Path:
 
 def main() -> None:
     try:
-        with SkyLink() as sky:  # api_key falls back to $SKYLINK_API_KEY
+        with SkyLink() as sky:  # RapidAPI channel, api_key falls back to $RAPIDAPI_KEY
             show_structured(sky)
             show_markdown(sky)
             save_pdf(sky)

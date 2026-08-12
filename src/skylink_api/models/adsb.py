@@ -23,6 +23,7 @@ They arrive as ``datetime`` objects with ``tzinfo is None``; treat them as UTC.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import ClassVar
 
 from pydantic import Field
 
@@ -47,6 +48,14 @@ class AdsbAircraft(SkyLinkModel):
     Everything except the identity and the two timestamps may be ``None``: the
     feed forwards whatever the transponder actually broadcast.
     """
+
+    __repr_fields__: ClassVar[tuple[str, ...]] = (
+        "icao24",
+        "callsign",
+        "latitude",
+        "longitude",
+        "altitude",
+    )
 
     icao24: str | None = None
     """ICAO 24-bit transponder address, 6 hex characters. Upper-cased by the API

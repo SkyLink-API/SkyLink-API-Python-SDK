@@ -22,7 +22,15 @@ are reached through a client instance, but can be imported from
 :mod:`skylink_api.resources` when you need them for annotations.
 """
 
+from . import helpers
 from ._client import AsyncSkyLink, SkyLink
+from ._constants import (
+    CHART_CATEGORIES,
+    CONTINENTS,
+    FLIGHT_CATEGORIES,
+    HISTORY_PLANS,
+    WEBHOOK_EVENTS,
+)
 from ._exceptions import (
     APIConnectionError,
     APIResponseValidationError,
@@ -42,10 +50,12 @@ from ._exceptions import (
 from ._response import RateLimitInfo
 from ._types import BBox, HistoryPlan, Provider, RequestOptions
 from ._version import __version__
+from .helpers.cache import CacheProtocol, MemoryCache
 from .models import (
     AdsbAircraft,
     AdsbAircraftList,
     AdsbAltitudeStats,
+    AdsbDiff,
     AdsbHealth,
     AdsbStatistics,
     AircraftDatabaseStats,
@@ -57,6 +67,7 @@ from .models import (
     AirlineRoute,
     AirlineRoutesResult,
     Airport,
+    AirportBrief,
     AirportBriefing,
     AirportFrequency,
     AirportRoutesResponse,
@@ -93,8 +104,10 @@ from .models import (
     DepartureFlight,
     DeparturesResponse,
     DistanceResponse,
+    EnrichedAircraft,
     EnrichedAirport,
     FaaDelayResponse,
+    FlightBrief,
     FlightBriefing,
     FlightBriefingText,
     FlightStatusArrival,
@@ -126,11 +139,13 @@ from .models import (
     Region,
     RegionDetail,
     RegionsResponse,
+    RouteBrief,
     RoutePair,
     RoutePairsResponse,
     Runway,
     ScheduleFlight,
     ScheduleResponse,
+    ScheduleWithStatus,
     SkyLinkModel,
     Taf,
     TafParsed,
@@ -153,8 +168,11 @@ from .models import (
     WindsAloftStation,
     WxCode,
 )
+from .models.webhooks import WebhookEvent
 
-__all__ = [
+# Plain lexicographic order (asserted by ``tests/test_exports.py``), not ruff's
+# isort-style grouping, which would float the SCREAMING_CASE constants to the top.
+__all__ = [  # noqa: RUF022
     "APIConnectionError",
     "APIResponseValidationError",
     "APIStatusError",
@@ -162,6 +180,7 @@ __all__ = [
     "AdsbAircraft",
     "AdsbAircraftList",
     "AdsbAltitudeStats",
+    "AdsbDiff",
     "AdsbHealth",
     "AdsbStatistics",
     "AirSigmetCoord",
@@ -178,6 +197,7 @@ __all__ = [
     "AirlineRoute",
     "AirlineRoutesResult",
     "Airport",
+    "AirportBrief",
     "AirportBriefing",
     "AirportFrequency",
     "AirportRoutesResponse",
@@ -198,6 +218,9 @@ __all__ = [
     "BriefingPirep",
     "BriefingRestriction",
     "BriefingWeather",
+    "CHART_CATEGORIES",
+    "CONTINENTS",
+    "CacheProtocol",
     "CallsignRoute",
     "CarbonEstimate",
     "Chart",
@@ -213,8 +236,11 @@ __all__ = [
     "DepartureFlight",
     "DeparturesResponse",
     "DistanceResponse",
+    "EnrichedAircraft",
     "EnrichedAirport",
+    "FLIGHT_CATEGORIES",
     "FaaDelayResponse",
+    "FlightBrief",
     "FlightBriefing",
     "FlightBriefingText",
     "FlightStatusArrival",
@@ -224,6 +250,7 @@ __all__ = [
     "FlightTimePrediction",
     "GroundDelay",
     "GroundStop",
+    "HISTORY_PLANS",
     "HistoryAirportTrafficResponse",
     "HistoryFilters",
     "HistoryFlight",
@@ -235,6 +262,7 @@ __all__ = [
     "IPLocation",
     "InternalServerError",
     "Layover",
+    "MemoryCache",
     "Metar",
     "MetarParsed",
     "MetarWithParsed",
@@ -254,11 +282,13 @@ __all__ = [
     "RegionDetail",
     "RegionsResponse",
     "RequestOptions",
+    "RouteBrief",
     "RoutePair",
     "RoutePairsResponse",
     "Runway",
     "ScheduleFlight",
     "ScheduleResponse",
+    "ScheduleWithStatus",
     "ServiceUnavailableError",
     "SkyLink",
     "SkyLinkError",
@@ -274,8 +304,10 @@ __all__ = [
     "ValidationErrorItem",
     "Visibility",
     "VrsRouteResult",
+    "WEBHOOK_EVENTS",
     "WeatherReport",
     "Webhook",
+    "WebhookEvent",
     "WebhookEventTypesResponse",
     "WebhookListResponse",
     "WebhookSubscription",
@@ -286,4 +318,5 @@ __all__ = [
     "WindsAloftStation",
     "WxCode",
     "__version__",
+    "helpers",
 ]

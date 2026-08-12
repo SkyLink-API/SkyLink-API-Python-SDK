@@ -20,21 +20,25 @@ from ._config import resolve_config
 from ._types import (
     NOT_GIVEN,
     HistoryPlan,
+    NotGiven,
     NotGivenOr,
     Provider,
     RequestOptions,
     RequestSpec,
     ResponseKind,
 )
+from .helpers.cache import CacheProtocol
 from .models.distance import DistanceResponse
 from .models.flight_status import FlightStatusResponse
 from .resources.adsb import Adsb, AsyncAdsb
 from .resources.aircraft import Aircraft, AsyncAircraft
 from .resources.airlines import Airlines, AsyncAirlines
 from .resources.airports import Airports, AsyncAirports
+from .resources.batch import AsyncBatch, Batch
 from .resources.briefing import AsyncBriefing, Briefing
 from .resources.carbon import AsyncCarbon, Carbon
 from .resources.charts import AsyncCharts, Charts
+from .resources.compose import AsyncCompose, Compose
 from .resources.delays import AsyncDelays, Delays
 from .resources.distance import AsyncDistance, Distance, DistanceUnit
 from .resources.flight_status import AsyncFlightStatus, FlightStatus
@@ -43,6 +47,7 @@ from .resources.history import AsyncHistory, History
 from .resources.ml import AsyncMl, Ml
 from .resources.navaids import AsyncNavaids, Navaids
 from .resources.notams import AsyncNotams, Notams
+from .resources.poll import AsyncPoll, Poll
 from .resources.routes import AsyncRoutes, Routes
 from .resources.schedules import AsyncSchedules, Schedules
 from .resources.tickets import AsyncTickets, Tickets
@@ -59,14 +64,15 @@ class SkyLink(SyncAPIClient):
 
         from skylink_api import SkyLink
 
-        with SkyLink(api_key="sk_...") as sky:
+        with SkyLink(api_key="...") as sky:            # RapidAPI by default
             data = sky.request("GET", "/weather/metar/KJFK")
 
     Args:
-        api_key: API key. Falls back to ``SKYLINK_API_KEY`` (direct) or
-            ``RAPIDAPI_KEY`` (rapidapi). Required unless ``base_url`` is given.
-        provider: ``"direct"`` (default, ``https://data.skylinkapi.com/v3.1``) or
-            ``"rapidapi"`` (``https://skylink-api.p.rapidapi.com``, no version prefix).
+        api_key: API key. Falls back to the environment — ``RAPIDAPI_KEY`` and then
+            ``SKYLINK_API_KEY`` on the rapidapi channel, ``SKYLINK_API_KEY`` on the
+            direct one. Required unless ``base_url`` is given.
+        provider: ``"rapidapi"`` (default, ``https://skylink-api.p.rapidapi.com``, no
+            version prefix) or ``"direct"`` (``https://data.skylinkapi.com/v3.1``).
         base_url: Override the endpoint entirely — used verbatim, no version is
             appended. With an explicit ``base_url`` a missing key is not an error,
             so staging instances running ``DISABLE_AUTH=true`` just work.
@@ -77,6 +83,10 @@ class SkyLink(SyncAPIClient):
         history_plan: ``"ultra"`` (default) or ``"mega"`` — selects the
             ``/{plan}/history`` URL prefix; can be overridden per call.
         default_headers: Extra headers merged into every request.
+        cache: Opt-in response cache — see
+            :class:`~skylink_api.helpers.cache.MemoryCache`. Only successful GETs
+            are cached, and only for operations with a non-zero TTL, so a cache
+            without rules changes nothing.
         http_client: Bring your own httpx client (proxies, custom transport).
         sleep: Backoff sleep function — injection point for tests.
         environ: Environment mapping used for key lookup (defaults to ``os.environ``).
@@ -92,6 +102,7 @@ class SkyLink(SyncAPIClient):
         max_retries: int | None = None,
         history_plan: HistoryPlan | None = None,
         default_headers: Mapping[str, str] | None = None,
+        cache: CacheProtocol | None = None,
         http_client: httpx.Client | None = None,
         sleep: Callable[[float], None] = time.sleep,
         environ: Mapping[str, str] | None = None,
@@ -106,11 +117,102 @@ class SkyLink(SyncAPIClient):
             default_headers=default_headers,
             environ=environ,
         )
-        super().__init__(config, http_client=http_client, sleep=sleep)
+        super().__init__(config, http_client=http_client, sleep=sleep, cache=cache)
 
     @property
     def api_key(self) -> str | None:
         return self._config.api_key
+
+    # ── alternative constructors ─────────────────────────────────────────────
+
+    @classmethod
+    def from_env(
+        cls,
+        *,
+        provider: Provider | None = None,
+        base_url: str | None = None,
+        timeout: NotGivenOr[float | httpx.Timeout | None] = NOT_GIVEN,
+        max_retries: int | None = None,
+        history_plan: HistoryPlan | None = None,
+        default_headers: Mapping[str, str] | None = None,
+        cache: CacheProtocol | None = None,
+        http_client: httpx.Client | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        environ: Mapping[str, str] | None = None,
+    ) -> SkyLink:
+        """Build a client whose key comes from the environment — and says so::
+
+            sky = SkyLink.from_env()                      # RAPIDAPI_KEY / SKYLINK_API_KEY
+            sky = SkyLink.from_env(provider="direct")     # SKYLINK_API_KEY
+
+        Same behaviour as ``SkyLink()`` with no ``api_key``, minus the ambiguity:
+        there is no ``api_key`` argument to accidentally pass ``None`` to, so a
+        reader can see at a glance where the credential comes from. Everything
+        else may still be overridden. A missing variable raises
+        :class:`~skylink_api.AuthenticationError` (unless ``base_url`` is given).
+        """
+
+        return cls(
+            provider=provider,
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=max_retries,
+            history_plan=history_plan,
+            default_headers=default_headers,
+            cache=cache,
+            http_client=http_client,
+            sleep=sleep,
+            environ=environ,
+        )
+
+    def with_options(
+        self,
+        *,
+        timeout: NotGivenOr[float | httpx.Timeout | None] = NOT_GIVEN,
+        max_retries: NotGivenOr[int] = NOT_GIVEN,
+        history_plan: NotGivenOr[HistoryPlan] = NOT_GIVEN,
+        default_headers: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
+        cache: NotGivenOr[CacheProtocol | None] = NOT_GIVEN,
+    ) -> SkyLink:
+        """A clone with some settings changed, sharing this client's connections::
+
+            patient = sky.with_options(timeout=120.0, max_retries=0)
+            archive = sky.with_options(history_plan="mega")
+
+        The clone **reuses the same** :class:`httpx.Client`, so no second
+        connection pool is opened, and it starts with fresh namespaces (nothing
+        is carried over from ``sky.weather`` & co.). Registered quota hooks are
+        copied as a snapshot; later ``on_rate_limit`` calls on either client do
+        not reach the other.
+
+        Ownership of the transport stays with the original: closing the clone
+        (``close()`` or leaving its ``with`` block) leaves the pool open, and
+        closing the original closes it for both. Keep the original alive for as
+        long as any clone is in use.
+
+        ``default_headers`` replaces the mapping rather than merging into it, so a
+        clone can also drop a header. Passing ``cache=None`` disables caching for
+        the clone; omitting it keeps this client's cache (shared, not copied).
+        """
+
+        config = self._config.with_overrides(
+            timeout=timeout,
+            max_retries=max_retries,
+            history_plan=history_plan,
+            default_headers=default_headers,
+        )
+        cls = type(self)
+        clone = cls.__new__(cls)
+        SyncAPIClient.__init__(
+            clone,
+            config,
+            http_client=self._http_client,
+            sleep=self._sleep,
+            cache=self._cache if isinstance(cache, NotGiven) else cache,
+            owns_transport=False,
+        )
+        clone._copy_hooks_from(self)
+        return clone
 
     # ── namespaces ───────────────────────────────────────────────────────────
 
@@ -222,6 +324,41 @@ class SkyLink(SyncAPIClient):
 
         return History(self)
 
+    @cached_property
+    def batch(self) -> Batch:
+        """The same call for many identifiers, bounded and failure tolerant.
+
+        ``sky.batch.metars([...])`` and friends return
+        ``{identifier: model | SkyLinkError}`` — see
+        :class:`~skylink_api.resources.batch.Batch`.
+        """
+
+        return Batch(self)
+
+    @cached_property
+    def poll(self) -> Poll:
+        """Endpoints on a timer, as iterators.
+
+        ``sky.poll.flight_status("BA123")`` yields status changes until the
+        flight lands; ``sky.poll.adsb(bbox=...)`` yields feed diffs for a live
+        map. Both survive 429/5xx and take an injectable ``sleep`` — see
+        :class:`~skylink_api.resources.poll.Poll`.
+        """
+
+        return Poll(self)
+
+    @cached_property
+    def compose(self) -> Compose:
+        """Multi-endpoint aggregates: whole pages in one call.
+
+        ``sky.compose.airport_brief("EGLL")`` fetches eight endpoints in
+        parallel and hands back one object where every failed part is ``None``
+        with its error in ``errors`` — see
+        :class:`~skylink_api.resources.compose.Compose`.
+        """
+
+        return Compose(self)
+
     # ── one-method namespaces, exposed as client methods ─────────────────────
 
     @cached_property
@@ -329,7 +466,7 @@ class AsyncSkyLink(AsyncAPIClient):
 
         from skylink_api import AsyncSkyLink
 
-        async with AsyncSkyLink(api_key="sk_...") as sky:
+        async with AsyncSkyLink(api_key="...") as sky:
             data = await sky.request("GET", "/weather/metar/KJFK")
 
     Takes the same arguments as :class:`SkyLink`, except ``http_client`` is an
@@ -346,6 +483,7 @@ class AsyncSkyLink(AsyncAPIClient):
         max_retries: int | None = None,
         history_plan: HistoryPlan | None = None,
         default_headers: Mapping[str, str] | None = None,
+        cache: CacheProtocol | None = None,
         http_client: httpx.AsyncClient | None = None,
         sleep: Callable[[float], Awaitable[None]] = _default_async_sleep,
         environ: Mapping[str, str] | None = None,
@@ -360,11 +498,89 @@ class AsyncSkyLink(AsyncAPIClient):
             default_headers=default_headers,
             environ=environ,
         )
-        super().__init__(config, http_client=http_client, sleep=sleep)
+        super().__init__(config, http_client=http_client, sleep=sleep, cache=cache)
 
     @property
     def api_key(self) -> str | None:
         return self._config.api_key
+
+    # ── alternative constructors ─────────────────────────────────────────────
+
+    @classmethod
+    def from_env(
+        cls,
+        *,
+        provider: Provider | None = None,
+        base_url: str | None = None,
+        timeout: NotGivenOr[float | httpx.Timeout | None] = NOT_GIVEN,
+        max_retries: int | None = None,
+        history_plan: HistoryPlan | None = None,
+        default_headers: Mapping[str, str] | None = None,
+        cache: CacheProtocol | None = None,
+        http_client: httpx.AsyncClient | None = None,
+        sleep: Callable[[float], Awaitable[None]] = _default_async_sleep,
+        environ: Mapping[str, str] | None = None,
+    ) -> AsyncSkyLink:
+        """Build a client whose key comes from the environment — see
+        :meth:`SkyLink.from_env`::
+
+            async with AsyncSkyLink.from_env() as sky:
+                ...
+        """
+
+        return cls(
+            provider=provider,
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=max_retries,
+            history_plan=history_plan,
+            default_headers=default_headers,
+            cache=cache,
+            http_client=http_client,
+            sleep=sleep,
+            environ=environ,
+        )
+
+    def with_options(
+        self,
+        *,
+        timeout: NotGivenOr[float | httpx.Timeout | None] = NOT_GIVEN,
+        max_retries: NotGivenOr[int] = NOT_GIVEN,
+        history_plan: NotGivenOr[HistoryPlan] = NOT_GIVEN,
+        default_headers: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
+        cache: NotGivenOr[CacheProtocol | None] = NOT_GIVEN,
+    ) -> AsyncSkyLink:
+        """A clone with some settings changed, sharing this client's connections.
+
+        Not a coroutine — the clone is built in place::
+
+            archive = sky.with_options(history_plan="mega")
+            flights = await archive.history.flights(icao24="4ca7b3")
+
+        Same semantics as :meth:`SkyLink.with_options`: the
+        :class:`httpx.AsyncClient` is reused, namespaces are not inherited, quota
+        hooks are copied as a snapshot, and the clone does not own the transport —
+        ``await clone.aclose()`` leaves the original's pool open.
+        """
+
+        config = self._config.with_overrides(
+            timeout=timeout,
+            max_retries=max_retries,
+            history_plan=history_plan,
+            default_headers=default_headers,
+        )
+        cls = type(self)
+        clone = cls.__new__(cls)
+        AsyncAPIClient.__init__(
+            clone,
+            config,
+            http_client=self._http_client,
+            sleep=self._sleep,
+            cache=self._cache if isinstance(cache, NotGiven) else cache,
+            owns_transport=False,
+        )
+        clone._copy_hooks_from(self)
+        return clone
 
     # ── namespaces ───────────────────────────────────────────────────────────
 
@@ -475,6 +691,37 @@ class AsyncSkyLink(AsyncAPIClient):
         """Archived ADS-B flights, tracks and positions (``/{plan}/history/*``)."""
 
         return AsyncHistory(self)
+
+    @cached_property
+    def batch(self) -> AsyncBatch:
+        """The same call for many identifiers, bounded and failure tolerant.
+
+        ``await sky.batch.metars([...])`` returns
+        ``{identifier: model | SkyLinkError}`` — see
+        :class:`~skylink_api.resources.batch.AsyncBatch`.
+        """
+
+        return AsyncBatch(self)
+
+    @cached_property
+    def poll(self) -> AsyncPoll:
+        """Endpoints on a timer, as async iterators.
+
+        ``async for status in sky.poll.flight_status("BA123")`` — see
+        :class:`~skylink_api.resources.poll.AsyncPoll`.
+        """
+
+        return AsyncPoll(self)
+
+    @cached_property
+    def compose(self) -> AsyncCompose:
+        """Multi-endpoint aggregates: whole pages in one call.
+
+        ``await sky.compose.airport_brief("EGLL")`` — see
+        :class:`~skylink_api.resources.compose.AsyncCompose`.
+        """
+
+        return AsyncCompose(self)
 
     # ── one-method namespaces, exposed as client methods ─────────────────────
 

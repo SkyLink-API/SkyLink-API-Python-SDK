@@ -1,0 +1,71 @@
+{
+  "raw": "TAF KJFK 271720Z 2718/2824 16012KT P6SM SCT035 TEMPO 2802/2806 1/2SM BR OVC002",
+  "icao": "KJFK",
+  "airport_name": "John F Kennedy International Airport",
+  "timestamp": "2025-09-27T18:00:00Z",
+  "parsed": {
+    "start_time": "2025-09-27T18:00:00Z",
+    "end_time": "2025-09-29T00:00:00Z",
+    "forecast": [
+      {
+        "type": "FROM",
+        "start_time": "2025-09-27T18:00:00Z",
+        "end_time": "2025-09-28T02:00:00Z",
+        "wind": {
+          "direction": 160,
+          "speed": 12,
+          "gust": null,
+          "variable": null
+        },
+        "visibility": {
+          "value": null,
+          "repr": "P6"
+        },
+        "clouds": [
+          {
+            "type": "SCT",
+            "base": 35,
+            "repr": "SCT035"
+          }
+        ],
+        "wx_codes": [],
+        "flight_rules": "VFR",
+        "probability": null,
+        "turbulence": [],
+        "icing": []
+      },
+      {
+        "type": "TEMPO",
+        "start_time": "2025-09-28T02:00:00Z",
+        "end_time": "2025-09-28T06:00:00Z",
+        "wind": {
+          "direction": 90,
+          "speed": 4,
+          "gust": null,
+          "variable": null
+        },
+        "visibility": {
+          "value": 0.5,
+          "repr": "1/2SM"
+        },
+        "clouds": [
+          {
+            "type": "OVC",
+            "base": 2,
+            "repr": "OVC002"
+          }
+        ],
+        "wx_codes": [
+          {
+            "repr": "BR",
+            "value": "Mist"
+          }
+        ],
+        "flight_rules": "LIFR",
+        "probability": null,
+        "turbulence": [],
+        "icing": []
+      }
+    ]
+  }
+}

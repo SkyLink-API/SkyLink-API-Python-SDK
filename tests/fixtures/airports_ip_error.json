@@ -1,0 +1,8 @@
+{
+  "ip_address": "10.0.0.1",
+  "location": null,
+  "airports": [],
+  "search_radius_km": 100,
+  "airports_found": 0,
+  "error": "Could not geolocate IP address 10.0.0.1"
+}

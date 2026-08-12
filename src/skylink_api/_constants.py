@@ -2,9 +2,13 @@
 
 Two delivery channels are supported:
 
-* ``direct``   — ``https://data.skylinkapi.com/v3.1`` with an ``x-api-key`` header.
-* ``rapidapi`` — ``https://skylink-api.p.rapidapi.com`` (**no** version prefix — the
-  RapidAPI listing is pinned to v3.1) with ``X-RapidAPI-Key``/``X-RapidAPI-Host``.
+* ``rapidapi`` (**default**) — ``https://skylink-api.p.rapidapi.com`` (**no** version
+  prefix — the RapidAPI listing is pinned to v3.1) with
+  ``X-RapidAPI-Key``/``X-RapidAPI-Host``.
+* ``direct`` — ``https://data.skylinkapi.com/v3.1`` with an ``x-api-key`` header.
+
+RapidAPI is the default because that is how most subscriptions reach the API; the
+direct channel is one ``provider="direct"`` away.
 
 Resource paths themselves are version independent; the version lives in the direct
 channel's base URL only.
@@ -37,7 +41,7 @@ RAPIDAPI_HOST_HEADER: Final = "X-RapidAPI-Host"
 
 DEFAULT_TIMEOUT: Final = httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0)
 DEFAULT_MAX_RETRIES: Final = 3
-DEFAULT_PROVIDER: Final[Literal["direct"]] = "direct"
+DEFAULT_PROVIDER: Final[Literal["rapidapi"]] = "rapidapi"
 DEFAULT_HISTORY_PLAN: Final[Literal["ultra"]] = "ultra"
 
 USER_AGENT: Final = f"skylink-api-python/{__version__}"
@@ -59,9 +63,99 @@ MAX_RETRY_DELAY: Final = 8.0
 #: Upper bound for a server supplied ``Retry-After`` (seconds or HTTP-date).
 MAX_RETRY_AFTER: Final = 60.0
 
-# ── Response headers ─────────────────────────────────────────────────────────
+# ── Enumerable values ────────────────────────────────────────────────────────
+#
+# The runtime twins of the ``Literal`` types declared on the resources. The
+# literals are for type checkers; these tuples are for the things you can only do
+# at runtime — populating a dropdown, validating user input, looping over every
+# category. Each one is kept in the order the backend declares it, and each is
+# asserted against its literal in ``tests/test_constants.py``.
 
+#: Aerodrome chart categories — ``models/v3/charts.py:ChartCategory`` on the
+#: backend. ``GEN`` general, ``GND`` ground/taxi, ``SID`` departure, ``STAR``
+#: arrival, ``APP`` approach. Runtime twin of
+#: :data:`~skylink_api.resources.charts.ChartCategory`.
+CHART_CATEGORIES: Final[tuple[str, ...]] = ("GEN", "GND", "SID", "STAR", "APP")
+
+#: Webhook event names — ``services/v31/webhook_service.py:VALID_EVENTS``.
+#: Runtime twin of :data:`~skylink_api.resources.webhooks.WebhookEventType` and
+#: of the :class:`~skylink_api.models.webhooks.WebhookEvent` enum.
+#: ``GET /webhooks/events`` returns the same six names, sorted.
+WEBHOOK_EVENTS: Final[tuple[str, ...]] = (
+    "status_changed",
+    "flight_delayed",
+    "flight_cancelled",
+    "flight_boarding",
+    "flight_landed",
+    "gate_changed",
+)
+
+#: Continent codes accepted by ``geo.countries()`` and ``geo.regions()`` —
+#: ``_VALID_CONTINENTS`` in the backend's ``routers/v3/countries.py``.
+#:
+#: .. warning::
+#:    ``"NA"`` (North America) is accepted by the API but **resolves to nothing**:
+#:    the backend reads its reference CSV with pandas, which parses the literal
+#:    ``NA`` as *not-a-number*, so every North American country ends up with an
+#:    empty ``continent`` and the filter matches zero rows. The value is listed
+#:    here because it is a real parameter value, not because it works. Until the
+#:    backend is fixed, get North America with
+#:    ``client.compose.north_america_countries()`` (which fetches every country
+#:    and keeps the ones whose ``continent`` is empty) or apply that filter
+#:    yourself.
+CONTINENTS: Final[tuple[str, ...]] = ("AF", "AN", "AS", "EU", "NA", "OC", "SA")
+
+#: History plan prefixes — the ``/{plan}/history/*`` URL segment. ``"ultra"``
+#: allows a **90**-day window, ``"mega"`` 365 days (``_MAX_DAYS`` in the
+#: backend's ``routers/v31/history_{ultra,mega}.py``); a ``[start, end]`` range
+#: longer than that is a **422** from the route itself. A ``403`` is the
+#: different failure of calling a plan the key is not subscribed to, which the
+#: gateway rejects before the route is reached. Runtime twin of
+#: :data:`~skylink_api.HistoryPlan`.
+HISTORY_PLANS: Final[tuple[str, ...]] = ("ultra", "mega")
+
+#: US flight categories, best to worst. **Not an API value** — the backend does
+#: not classify reports, :func:`skylink_api.helpers.weather.flight_category`
+#: derives them from visibility and ceiling. Runtime twin of
+#: :data:`~skylink_api.helpers.weather.FlightCategory`.
+FLIGHT_CATEGORIES: Final[tuple[str, ...]] = ("VFR", "MVFR", "IFR", "LIFR")
+
+# ── Response headers ─────────────────────────────────────────────────────────
+#
+# The two channels spell the same quota differently, so the SDK understands both.
+#
+# * **RapidAPI** sends ``X-RateLimit-Requests-{Limit,Remaining,Reset}`` — the
+#   request quota of the subscribed plan.
+# * **Direct** (the APISIX gateway in front of ``data.skylinkapi.com``) sends the
+#   unprefixed ``X-RateLimit-{Limit,Remaining,Reset}`` — and spells them
+#   ``X-Ratelimit-Limit`` on the wire, which is fine: header names are
+#   case-insensitive and :func:`~skylink_api._response.get_header` treats them so.
+
+#: RapidAPI's per-plan request quota.
 RATE_LIMIT_LIMIT_HEADER: Final = "X-RateLimit-Requests-Limit"
 RATE_LIMIT_REMAINING_HEADER: Final = "X-RateLimit-Requests-Remaining"
 RATE_LIMIT_RESET_HEADER: Final = "X-RateLimit-Requests-Reset"
+
+#: The direct gateway's quota, same meaning without the ``Requests`` infix.
+DIRECT_RATE_LIMIT_LIMIT_HEADER: Final = "X-RateLimit-Limit"
+DIRECT_RATE_LIMIT_REMAINING_HEADER: Final = "X-RateLimit-Remaining"
+DIRECT_RATE_LIMIT_RESET_HEADER: Final = "X-RateLimit-Reset"
+
+#: ``(limit, remaining, reset)`` header names, **in priority order**. The first
+#: family that yields a number wins.
+#:
+#: RapidAPI comes first on purpose: it answers with *both* families plus a third,
+#: noisy one — ``X-RateLimit-rapid-free-plans-hard-limit-{limit,remaining,reset}``,
+#: the marketplace's global free-tier ceiling rather than this key's quota. Only
+#: exact (case-insensitive) name matches are accepted, so that triplet is never
+#: mistaken for either family, and the generic names never shadow the plan quota.
+RATE_LIMIT_HEADER_SETS: Final[tuple[tuple[str, str, str], ...]] = (
+    (RATE_LIMIT_LIMIT_HEADER, RATE_LIMIT_REMAINING_HEADER, RATE_LIMIT_RESET_HEADER),
+    (
+        DIRECT_RATE_LIMIT_LIMIT_HEADER,
+        DIRECT_RATE_LIMIT_REMAINING_HEADER,
+        DIRECT_RATE_LIMIT_RESET_HEADER,
+    ),
+)
+
 RETRY_AFTER_HEADER: Final = "Retry-After"

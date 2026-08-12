@@ -208,6 +208,73 @@ def test_rate_limit_garbage_values_are_ignored() -> None:
     assert parse_rate_limit({"X-RateLimit-Requests-Limit": "n/a"}) is None
 
 
+def test_direct_channel_rate_limit_headers_are_parsed() -> None:
+    """The direct gateway (APISIX) omits the ``Requests`` infix — verbatim capture."""
+
+    headers = {
+        "X-RateLimit-Limit": "750000",
+        "X-RateLimit-Remaining": "749996",
+        "X-RateLimit-Reset": "86385",
+    }
+    assert parse_rate_limit(headers) == RateLimitInfo(limit=750000, remaining=749996, reset=86385)
+
+
+def test_direct_channel_rate_limit_headers_are_case_insensitive() -> None:
+    """Live direct responses spell them ``X-Ratelimit-Limit``, lowercase ``l``."""
+
+    headers = {
+        "X-Ratelimit-Limit": "750000",
+        "X-Ratelimit-Remaining": "749996",
+        "X-Ratelimit-Reset": "86385",
+    }
+    assert parse_rate_limit(headers) == RateLimitInfo(limit=750000, remaining=749996, reset=86385)
+
+
+def test_rapidapi_plan_quota_wins_over_the_other_header_families() -> None:
+    """All three families at once: the plan's ``Requests`` quota is the answer.
+
+    A live RapidAPI response carries the plan quota, the marketplace's global
+    free-tier ceiling (``rapid-free-plans-hard-limit``) and — depending on the
+    edge — the generic names too. Reporting either of the other two would show
+    the caller numbers that have nothing to do with their subscription.
+    """
+
+    headers = {
+        "X-RateLimit-Requests-Limit": "10000",
+        "X-RateLimit-Requests-Remaining": "8938",
+        "X-RateLimit-Requests-Reset": "319216",
+        "X-RateLimit-rapid-free-plans-hard-limit-limit": "500",
+        "X-RateLimit-rapid-free-plans-hard-limit-remaining": "499",
+        "X-RateLimit-rapid-free-plans-hard-limit-reset": "60",
+        "X-RateLimit-Limit": "750000",
+        "X-RateLimit-Remaining": "749996",
+        "X-RateLimit-Reset": "86385",
+    }
+    assert parse_rate_limit(headers) == RateLimitInfo(limit=10000, remaining=8938, reset=319216)
+
+
+def test_rapid_free_plans_noise_alone_is_not_a_quota() -> None:
+    """The noisy triplet matches neither family, so it is ignored entirely."""
+
+    headers = {
+        "X-RateLimit-rapid-free-plans-hard-limit-limit": "500",
+        "X-RateLimit-rapid-free-plans-hard-limit-remaining": "499",
+        "X-RateLimit-rapid-free-plans-hard-limit-reset": "60",
+    }
+    assert parse_rate_limit(headers) is None
+
+
+def test_unparseable_plan_quota_falls_back_to_the_generic_family() -> None:
+    """A family that yields no number at all is skipped, not treated as the answer."""
+
+    headers = {
+        "X-RateLimit-Requests-Limit": "n/a",
+        "X-RateLimit-Limit": "750000",
+        "X-RateLimit-Remaining": "749996",
+    }
+    assert parse_rate_limit(headers) == RateLimitInfo(limit=750000, remaining=749996)
+
+
 def test_retry_after_parsing() -> None:
     assert parse_retry_after({"Retry-After": "5"}) == 5.0
     assert parse_retry_after({"retry-after": "0"}) == 0.0

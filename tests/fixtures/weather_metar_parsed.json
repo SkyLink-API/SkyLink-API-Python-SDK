@@ -1,0 +1,35 @@
+{
+  "raw": "METAR KJFK 271851Z 16013KT 10SM FEW024 15/09 A3020 RMK AO2 SLP216 T01500089",
+  "icao": "KJFK",
+  "airport_name": "John F Kennedy International Airport",
+  "timestamp": "2025-09-27T18:55:00Z",
+  "parsed": {
+    "wind": {
+      "direction": 160,
+      "speed": 13,
+      "gust": null,
+      "variable": null
+    },
+    "visibility": {
+      "value": 10,
+      "repr": "10SM"
+    },
+    "clouds": [
+      {
+        "type": "FEW",
+        "base": 24,
+        "repr": "FEW024"
+      }
+    ],
+    "temperature": 15,
+    "dewpoint": 9,
+    "altimeter": 30.2,
+    "flight_rules": "VFR",
+    "wx_codes": [],
+    "remarks": "AO2 SLP216 T01500089",
+    "time": "2025-09-27T18:51:00Z",
+    "density_altitude": 512,
+    "pressure_altitude": 87,
+    "relative_humidity": 0.67
+  }
+}

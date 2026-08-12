@@ -89,6 +89,11 @@ class RequestSpec:
     #: Pydantic model (or any type pydantic can validate, e.g. ``list[Airline]``)
     #: the JSON payload is coerced into. ``None`` returns the parsed JSON as-is.
     cast_to: Any = None
+    #: Dotted operation name (``"weather.metar"``) used to look up a cache TTL.
+    #: Optional: when it is ``None`` the name is derived from ``path`` by
+    #: :func:`skylink_api.helpers.cache.operation_name`, which is right for every
+    #: endpoint the SDK models. Set it when the path cannot speak for itself.
+    operation: str | None = None
 
 
 class RequestOptions(TypedDict, total=False):

@@ -23,6 +23,8 @@ an address.
 from __future__ import annotations
 
 import re
+from collections.abc import AsyncIterator, Iterator
+from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .._constants import DEFAULT_HISTORY_PLAN
@@ -39,11 +41,33 @@ from ..models.history import (
 if TYPE_CHECKING:
     from .._client import AsyncSkyLink, SkyLink
 
-__all__ = ["AsyncHistory", "History", "is_icao24", "resolve_plan"]
+__all__ = [
+    "DEFAULT_ITER_WINDOW_DAYS",
+    "PLAN_FLIGHT_LIMITS",
+    "PLAN_WINDOW_DAYS",
+    "AsyncHistory",
+    "History",
+    "is_icao24",
+    "resolve_plan",
+]
 
 #: Traffic direction filter for :meth:`History.airport_traffic`: departures,
 #: arrivals, or both (the default).
 TrafficDirection = Literal["dep", "arr", "both"]
+
+#: Longest ``[start, end]`` range a **single** request may cover, per plan —
+#: ``_MAX_DAYS`` in the backend's ``routers/v31/history_{ultra,mega}.py``. Asking
+#: for more is a ``422``, not a truncated answer. :meth:`History.iter_flights`
+#: exists precisely to spend several requests instead.
+PLAN_WINDOW_DAYS: dict[str, int] = {"ultra": 90, "mega": 365}
+
+#: Largest ``limit`` ``/{plan}/history/flights`` accepts (its default is 100).
+PLAN_FLIGHT_LIMITS: dict[str, int] = {"ultra": 1000, "mega": 2000}
+
+#: Default slice width of :meth:`History.iter_flights`. A week is small enough
+#: that a busy airport pair stays under the per-request row cap and large enough
+#: that a 90-day walk is 13 requests rather than 90.
+DEFAULT_ITER_WINDOW_DAYS = 7
 
 _ICAO24_RE = re.compile(r"^[0-9a-fA-F]{6}$")
 
@@ -89,6 +113,29 @@ def _window(start: DateLike | None, end: DateLike | None) -> dict[str, str | Non
 # ── builders ─────────────────────────────────────────────────────────────────
 
 
+def _check_flight_filters(
+    *,
+    icao24: str | None,
+    registration: str | None,
+    callsign: str | None,
+    departure_icao: str | None,
+    arrival_icao: str | None,
+    caller: str = "history.flights()",
+) -> None:
+    """Refuse an unfiltered flight search before it costs a request.
+
+    The endpoint answers ``422 At least one of icao24, registration, callsign,
+    departure_icao, arrival_icao must be provided``; checking here spends no
+    quota and gives the caller a plain :class:`ValueError` instead.
+    """
+
+    if not any((icao24, registration, callsign, departure_icao, arrival_icao)):
+        raise ValueError(
+            f"{caller} needs at least one filter: "
+            "icao24, registration, callsign, departure_icao or arrival_icao"
+        )
+
+
 def _flights_spec(
     *,
     plan: str,
@@ -103,17 +150,17 @@ def _flights_spec(
 ) -> RequestSpec:
     """``GET /{plan}/history/flights``.
 
-    The endpoint refuses an unfiltered search: without at least one of the five
-    identifiers it answers ``422 At least one of icao24, registration, callsign,
-    departure_icao, arrival_icao must be provided``. Checking here spends no
-    quota and gives the caller a plain :class:`ValueError` instead.
+    At least one of the five identifiers is required — see
+    :func:`_check_flight_filters`.
     """
 
-    if not any((icao24, registration, callsign, departure_icao, arrival_icao)):
-        raise ValueError(
-            "history.flights() needs at least one filter: "
-            "icao24, registration, callsign, departure_icao or arrival_icao"
-        )
+    _check_flight_filters(
+        icao24=icao24,
+        registration=registration,
+        callsign=callsign,
+        departure_icao=departure_icao,
+        arrival_icao=arrival_icao,
+    )
 
     return RequestSpec(
         method="GET",
@@ -221,6 +268,159 @@ def _airport_traffic_spec(
     )
 
 
+# ── window walking (iter_flights) ────────────────────────────────────────────
+
+
+def _as_datetime(value: DateLike, *, label: str) -> datetime:
+    """Coerce a ``DateLike`` into a tz-aware UTC datetime for window arithmetic.
+
+    The plain :meth:`History.flights` passes ``start``/``end`` through untouched,
+    but slicing a range into windows means doing arithmetic on it, so here the
+    value has to become a real datetime. Naive input is read as UTC, matching the
+    backend (``validate_date_range`` stamps ``timezone.utc`` on naive values).
+    """
+
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError(f"{label} must be an ISO 8601 datetime, got {value!r}") from None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _slice_windows(
+    start: datetime, end: datetime, window_days: int
+) -> list[tuple[datetime, datetime]]:
+    """Cut ``[start, end]`` into ``window_days``-long slices, **newest first**.
+
+    Newest first because that is the order results are wanted in (a UI shows the
+    most recent flights first) and because it makes ``max_items`` meaningful:
+    "the 20 most recent" rather than "20 from wherever the walk started".
+
+    Slices touch at the edges (each window's start is the previous window's end),
+    which is why the caller must deduplicate: a flight recorded exactly on a
+    boundary is returned by both requests.
+    """
+
+    span = timedelta(days=window_days)
+    windows: list[tuple[datetime, datetime]] = []
+    cursor = end
+    while cursor > start:
+        window_start = max(start, cursor - span)
+        windows.append((window_start, cursor))
+        cursor = window_start
+    return windows
+
+
+def _positive_int(value: object, name: str) -> int:
+    """Read a caller supplied count, or raise :class:`ValueError` immediately.
+
+    The twin of :func:`skylink_api.resources.adsb._positive_int`, and the same
+    rule: anything that is not a finite number of at least 1 — ``None``, a
+    string, ``NaN``, zero, a negative — fails at the call site rather than deep
+    inside a generator. Values above a documented maximum are *not* handled here;
+    those are clamped by the caller.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"{name} must be a number, got {value!r}")
+    if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+        raise ValueError(f"{name} must be a finite number, got {value!r}")
+    number = int(value)
+    if number < 1:
+        raise ValueError(f"{name} must be at least 1, got {value!r}")
+    return number
+
+
+def _flight_key(flight: HistoryFlight) -> tuple[str, ...]:
+    """Identity used to deduplicate flights across overlapping windows.
+
+    ``flight_id`` (a UUID) whenever the row has one — it always does on this
+    endpoint. The fallback covers a hypothetical row without it and is built from
+    the columns that identify a movement: address, callsign and the two
+    first/last-seen timestamps.
+    """
+
+    if flight.flight_id:
+        return ("id", flight.flight_id)
+    return (
+        "row",
+        flight.icao24 or "",
+        flight.callsign or "",
+        str(flight.flight_start),
+        str(flight.flight_end),
+    )
+
+
+class _FlightWindowWalker:
+    """Window planning, deduplication and the item cap for ``iter_flights``.
+
+    Pure state, no I/O — the sync and async iterators share it so the parts that
+    are easy to get wrong (window edges, duplicates, when to stop) cannot drift
+    apart. All validation happens in the constructor, which is why the public
+    methods can call it eagerly and fail before touching the network.
+    """
+
+    def __init__(
+        self,
+        *,
+        plan: str,
+        window_days: int,
+        max_items: int | None,
+        start: DateLike | None,
+        end: DateLike | None,
+        limit: int | None,
+    ) -> None:
+        max_window = PLAN_WINDOW_DAYS.get(plan, PLAN_WINDOW_DAYS[DEFAULT_HISTORY_PLAN])
+
+        # Above the plan's window the slice is clamped, not refused: the walk is
+        # made of several requests anyway, so a too-wide slice has an obvious
+        # correct meaning ("as wide as this plan allows") and the alternative is
+        # an error for asking the SDK to do exactly what it exists to do. Below
+        # 1 — or not a number at all — there is nothing to clamp to.
+        slice_days = min(_positive_int(window_days, "window_days"), max_window)
+        max_rows = None if max_items is None else _positive_int(max_items, "max_items")
+
+        end_dt = _as_datetime(end, label="end") if end is not None else datetime.now(timezone.utc)
+        start_dt = (
+            _as_datetime(start, label="start")
+            if start is not None
+            else end_dt - timedelta(days=max_window)
+        )
+        if start_dt >= end_dt:
+            raise ValueError(f"start must be before end, got {start_dt} >= {end_dt}")
+
+        #: Per-request row cap. Defaults to the plan maximum rather than the
+        #: API's default of 100, so a busy window is not silently truncated.
+        self.limit = (
+            limit
+            if limit is not None
+            else PLAN_FLIGHT_LIMITS.get(plan, PLAN_FLIGHT_LIMITS[DEFAULT_HISTORY_PLAN])
+        )
+        self.windows = _slice_windows(start_dt, end_dt, slice_days)
+        self.max_items = max_rows
+        self.yielded = 0
+        self._seen: set[tuple[str, ...]] = set()
+
+    def take(self, response: HistoryFlightsResponse) -> tuple[list[HistoryFlight], bool]:
+        """Filter one window's rows; return what to yield and whether to stop."""
+
+        fresh: list[HistoryFlight] = []
+        for flight in response.flights:
+            key = _flight_key(flight)
+            if key in self._seen:
+                continue
+            self._seen.add(key)
+            fresh.append(flight)
+            self.yielded += 1
+            if self.max_items is not None and self.yielded >= self.max_items:
+                return fresh, True
+        return fresh, False
+
+
 # ── sync ─────────────────────────────────────────────────────────────────────
 
 
@@ -305,6 +505,134 @@ class History:
             limit=limit,
         )
         return cast(HistoryFlightsResponse, self._client.execute(spec, request_options))
+
+    def iter_flights(
+        self,
+        *,
+        window_days: int = DEFAULT_ITER_WINDOW_DAYS,
+        max_items: int | None = None,
+        plan: HistoryPlan | None = None,
+        start: DateLike | None = None,
+        end: DateLike | None = None,
+        icao24: str | None = None,
+        registration: str | None = None,
+        callsign: str | None = None,
+        departure_icao: str | None = None,
+        arrival_icao: str | None = None,
+        limit: int | None = None,
+        request_options: RequestOptions | None = None,
+    ) -> Iterator[HistoryFlight]:
+        """Walk archived flights across a long range, newest first.
+
+        :meth:`flights` has no pagination — no offset, no cursor — and refuses a
+        range longer than the plan allows (90 days on ultra, 365 on mega). So
+        "every flight of this aircraft over the last six months" is not one call
+        but a series of them. This is that series::
+
+            for flight in sky.history.iter_flights(registration="G-STBA", max_items=50):
+                print(flight.takeoff_time, flight.callsign)
+
+        The range is cut into ``window_days``-long slices and walked **from the
+        most recent slice backwards**, so the first flights yielded are the
+        newest ones and ``max_items`` means "the N most recent".
+
+        Args:
+            window_days: Slice width, 1 to the plan's maximum (90 on ultra, 365
+                on mega); a wider value is **clamped to the plan's maximum**, not
+                rejected. Each slice is one request, so this trades requests
+                against the per-request row cap: narrow windows cost quota, wide
+                ones risk hitting ``limit`` and silently dropping the oldest
+                flights of that slice.
+            max_items: Stop after this many distinct flights. ``None`` walks the
+                whole range.
+            plan: Override the client's ``history_plan`` for every request.
+            start: Range start. ``datetime``/``date``/ISO 8601 string; naive
+                values are read as UTC. Defaults to the plan's full window before
+                ``end`` (90 days on ultra, 365 on mega).
+            end: Range end, same handling. Defaults to now (UTC).
+            icao24: 6-hex transponder address.
+            registration: Tail number, resolved to an address server-side.
+            callsign: Exact match (``"BAW117"``), not a prefix.
+            departure_icao: 4-letter ICAO of the departure airport.
+            arrival_icao: 4-letter ICAO of the arrival airport.
+            limit: Rows per **window**. Defaults to the plan maximum (1 000 /
+                2 000) rather than the API's default of 100, because truncating a
+                window here loses flights invisibly.
+            request_options: Per-request overrides applied to every window.
+
+        Yields:
+            :class:`~skylink_api.models.history.HistoryFlight` rows, deduplicated
+            by ``flight_id`` — window edges touch, so a flight sitting on a
+            boundary is returned by two requests and yielded once.
+
+        Note:
+            The plan's day limit applies **per request**, not to the walk, so a
+            six-month range is reachable on ultra. Whether rows that old still
+            exist is a matter of retention, not of this SDK.
+
+            Rows are matched on their ingest time (``created_at``), not on
+            takeoff, and only ``ARCHIVED`` flights are stored — filtering by
+            ``flight_state`` is pointless.
+
+        Raises:
+            ValueError: no filter given (same rule as :meth:`flights`),
+                ``window_days`` or ``max_items`` below 1 or not a finite number,
+                an unparseable ``start``/``end``, or ``start >= end``. All raised
+                from the call itself, before any request; a ``window_days``
+                *above* the plan maximum is clamped instead.
+            UnprocessableEntityError: rejected by the API despite the local
+                checks (e.g. ``icao24`` and ``registration`` disagreeing).
+        """
+
+        resolved_plan = self._plan(plan)
+        _check_flight_filters(
+            icao24=icao24,
+            registration=registration,
+            callsign=callsign,
+            departure_icao=departure_icao,
+            arrival_icao=arrival_icao,
+            caller="history.iter_flights()",
+        )
+        walker = _FlightWindowWalker(
+            plan=resolved_plan,
+            window_days=window_days,
+            max_items=max_items,
+            start=start,
+            end=end,
+            limit=limit,
+        )
+        return self._iter_flights(
+            walker,
+            plan=resolved_plan,
+            icao24=icao24,
+            registration=registration,
+            callsign=callsign,
+            departure_icao=departure_icao,
+            arrival_icao=arrival_icao,
+            request_options=request_options,
+        )
+
+    def _iter_flights(
+        self,
+        walker: _FlightWindowWalker,
+        *,
+        plan: str,
+        request_options: RequestOptions | None,
+        **filters: Any,
+    ) -> Iterator[HistoryFlight]:
+        for window_start, window_end in walker.windows:
+            spec = _flights_spec(
+                plan=plan,
+                start=window_start,
+                end=window_end,
+                limit=walker.limit,
+                **filters,
+            )
+            response = cast(HistoryFlightsResponse, self._client.execute(spec, request_options))
+            rows, done = walker.take(response)
+            yield from rows
+            if done:
+                return
 
     def flight(
         self,
@@ -596,6 +924,102 @@ class AsyncHistory:
         )
         result: Any = await self._client.execute(spec, request_options)
         return cast(HistoryFlightsResponse, result)
+
+    def iter_flights(
+        self,
+        *,
+        window_days: int = DEFAULT_ITER_WINDOW_DAYS,
+        max_items: int | None = None,
+        plan: HistoryPlan | None = None,
+        start: DateLike | None = None,
+        end: DateLike | None = None,
+        icao24: str | None = None,
+        registration: str | None = None,
+        callsign: str | None = None,
+        departure_icao: str | None = None,
+        arrival_icao: str | None = None,
+        limit: int | None = None,
+        request_options: RequestOptions | None = None,
+    ) -> AsyncIterator[HistoryFlight]:
+        """Walk archived flights across a long range, newest first.
+
+        Async twin of :meth:`History.iter_flights`; see it for the windowing and
+        deduplication notes. The method is **not** a coroutine — call it without
+        ``await`` and drive it with ``async for``::
+
+            async for flight in sky.history.iter_flights(callsign="BAW117", max_items=20):
+                print(flight.takeoff_time)
+
+        Args:
+            window_days: Slice width, 1 to the plan's maximum (one request each);
+                a wider value is clamped to that maximum.
+            max_items: Stop after this many distinct flights.
+            plan: Override the client's ``history_plan`` for every request.
+            start: Range start; defaults to the plan's full window before ``end``.
+            end: Range end; defaults to now (UTC).
+            icao24: 6-hex transponder address.
+            registration: Tail number.
+            callsign: Exact match.
+            departure_icao: Departure airport ICAO.
+            arrival_icao: Arrival airport ICAO.
+            limit: Rows per window; defaults to the plan maximum.
+            request_options: Per-request overrides applied to every window.
+
+        Raises:
+            ValueError: no filter, bad ``window_days``/``max_items``, or an
+                unusable ``start``/``end`` — before any request.
+        """
+
+        resolved_plan = self._plan(plan)
+        _check_flight_filters(
+            icao24=icao24,
+            registration=registration,
+            callsign=callsign,
+            departure_icao=departure_icao,
+            arrival_icao=arrival_icao,
+            caller="history.iter_flights()",
+        )
+        walker = _FlightWindowWalker(
+            plan=resolved_plan,
+            window_days=window_days,
+            max_items=max_items,
+            start=start,
+            end=end,
+            limit=limit,
+        )
+        return self._iter_flights(
+            walker,
+            plan=resolved_plan,
+            icao24=icao24,
+            registration=registration,
+            callsign=callsign,
+            departure_icao=departure_icao,
+            arrival_icao=arrival_icao,
+            request_options=request_options,
+        )
+
+    async def _iter_flights(
+        self,
+        walker: _FlightWindowWalker,
+        *,
+        plan: str,
+        request_options: RequestOptions | None,
+        **filters: Any,
+    ) -> AsyncIterator[HistoryFlight]:
+        for window_start, window_end in walker.windows:
+            spec = _flights_spec(
+                plan=plan,
+                start=window_start,
+                end=window_end,
+                limit=walker.limit,
+                **filters,
+            )
+            result: Any = await self._client.execute(spec, request_options)
+            rows, done = walker.take(cast(HistoryFlightsResponse, result))
+            for flight in rows:
+                yield flight
+            if done:
+                return
 
     async def flight(
         self,

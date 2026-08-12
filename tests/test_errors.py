@@ -62,7 +62,7 @@ def _raise(
     return excinfo.value
 
 
-# ── the three body shapes ────────────────────────────────────────────────────
+# ── the body shapes ──────────────────────────────────────────────────────────
 
 
 def test_shape_a_gateway_envelope(respx_mock: respx.MockRouter, sleeper: SleepRecorder) -> None:
@@ -96,6 +96,45 @@ def test_shape_c_validation_errors(respx_mock: respx.MockRouter, sleeper: SleepR
     assert first.msg == "String should have at least 4 characters"
     assert first.type == "string_too_short"
     assert "query.icao" in error.message
+
+
+def test_shape_d_apisix_route_not_found(
+    respx_mock: respx.MockRouter, sleeper: SleepRecorder
+) -> None:
+    """The direct gateway's own 404, for a path or method it does not route.
+
+    APISIX answers ``{"error_msg": ...}`` — labelled ``text/plain``, and with no
+    ``detail`` — before the application is ever reached. Without this key the
+    error would degrade to a bare ``HTTP 404`` and throw away the one line that
+    says what happened.
+    """
+
+    error = _raise(
+        respx_mock,
+        sleeper,
+        httpx.Response(
+            404,
+            content=b'{"error_msg":"404 Route Not Found"}',
+            headers={"Content-Type": "text/plain; charset=utf-8"},
+        ),
+    )
+
+    assert isinstance(error, NotFoundError)
+    assert error.message == "404 Route Not Found"
+    assert error.code is None
+
+
+def test_shape_e_rapidapi_unknown_endpoint(
+    respx_mock: respx.MockRouter, sleeper: SleepRecorder
+) -> None:
+    """The marketplace edge's 404 for a path its listing does not declare."""
+
+    body = {"message": "Endpoint '/v3.1/weather/metar/KJFK' does not exist"}
+    error = _raise(respx_mock, sleeper, httpx.Response(404, json=body))
+
+    assert isinstance(error, NotFoundError)
+    assert error.message == body["message"]
+    assert error.body == body
 
 
 def test_error_shapes_via_parser_directly() -> None:

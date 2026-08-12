@@ -28,6 +28,8 @@ converting them here would be guesswork. Cast at the call site::
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from pydantic import Field
 
 from ._base import SkyLinkModel
@@ -60,6 +62,8 @@ class Airport(SkyLinkModel):
     text search drops ``elevation_ft``/``iso_region``, the location search keeps
     them, and :class:`EnrichedAirport` adds the rest of the CSV row.
     """
+
+    __repr_fields__: ClassVar[tuple[str, ...]] = ("ident", "iata_code", "name", "iso_country")
 
     id: int | None = None
     """OurAirports row id. ``None`` on text-search hits built from the search

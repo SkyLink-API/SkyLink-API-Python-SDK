@@ -26,6 +26,8 @@ from :class:`~skylink_api.models._base.SkyLinkModel` is doing real work here.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from ._base import SkyLinkModel
 
 __all__ = [
@@ -99,6 +101,8 @@ class FlightStatusArrival(FlightStatusLeg):
 
 class FlightStatusResponse(SkyLinkModel):
     """Live status of one flight (``GET /flight_status/{flight_number}``)."""
+
+    __repr_fields__: ClassVar[tuple[str, ...]] = ("flight_number", "airline", "status")
 
     flight_number: str | None = None
     """Flight number as the source printed it — often spaced (``"BA 123"``),

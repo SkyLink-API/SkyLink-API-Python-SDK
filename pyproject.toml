@@ -41,6 +41,9 @@ classifiers = [
 dependencies = ["httpx>=0.25,<1", "pydantic>=2.5,<3"]
 
 [project.optional-dependencies]
+# `skylink_api.pandas_ext.to_dataframe` — the only part of the SDK that needs it,
+# and it imports pandas lazily, so this stays out of the default install.
+pandas = ["pandas>=2.0"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -49,6 +52,7 @@ dev = [
     "mypy>=1.11",
     "build>=1.2",
     "twine>=5.0",
+    "pandas>=2.0", # so CI runs tests/test_pandas_ext.py instead of skipping it
 ]
 
 [project.urls]
@@ -91,6 +95,12 @@ files = ["src/skylink_api"]
 [[tool.mypy.overrides]]
 module = "tests.*"
 strict = false
+
+# pandas ships no py.typed marker; it is an optional extra used behind
+# `if TYPE_CHECKING` in `pandas_ext`, so type-checking must not depend on it.
+[[tool.mypy.overrides]]
+module = "pandas.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

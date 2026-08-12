@@ -8,6 +8,12 @@ fields from the API survive parsing and stay reachable through
     from skylink_api.models.weather import Metar  # equivalent
 
 No two domains export the same name, so this flat namespace needs no aliasing.
+
+Two exceptions to "everything here is a pydantic model":
+:class:`~skylink_api.models.poll.AdsbDiff` is a plain dataclass — it is computed
+by the SDK from two consecutive responses, not parsed from one — and so is
+everything in :mod:`skylink_api.models.compose`, which stitches several
+responses together and carries the errors of the parts that failed.
 """
 
 from ._base import SkyLinkModel
@@ -56,6 +62,13 @@ from .charts import (
     ChartsResponse,
 )
 from .common import Number
+from .compose import (
+    AirportBrief,
+    EnrichedAircraft,
+    FlightBrief,
+    RouteBrief,
+    ScheduleWithStatus,
+)
 from .delays import (
     AirspaceFlowProgram,
     Closure,
@@ -99,6 +112,7 @@ from .notams import (
     NotamEntry,
     NotamsResponse,
 )
+from .poll import AdsbDiff
 from .routes import (
     AirlineRoute,
     AirlineRoutesResult,
@@ -148,6 +162,7 @@ from .weather import (
 )
 from .webhooks import (
     Webhook,
+    WebhookEvent,
     WebhookEventTypesResponse,
     WebhookListResponse,
     WebhookSubscription,
@@ -158,6 +173,7 @@ __all__ = [
     "AdsbAircraft",
     "AdsbAircraftList",
     "AdsbAltitudeStats",
+    "AdsbDiff",
     "AdsbHealth",
     "AdsbStatistics",
     "AirSigmetCoord",
@@ -174,6 +190,7 @@ __all__ = [
     "AirlineRoute",
     "AirlineRoutesResult",
     "Airport",
+    "AirportBrief",
     "AirportBriefing",
     "AirportFrequency",
     "AirportRoutesResponse",
@@ -205,8 +222,10 @@ __all__ = [
     "DepartureFlight",
     "DeparturesResponse",
     "DistanceResponse",
+    "EnrichedAircraft",
     "EnrichedAirport",
     "FaaDelayResponse",
+    "FlightBrief",
     "FlightBriefing",
     "FlightBriefingText",
     "FlightStatusArrival",
@@ -238,11 +257,13 @@ __all__ = [
     "Region",
     "RegionDetail",
     "RegionsResponse",
+    "RouteBrief",
     "RoutePair",
     "RoutePairsResponse",
     "Runway",
     "ScheduleFlight",
     "ScheduleResponse",
+    "ScheduleWithStatus",
     "SkyLinkModel",
     "Taf",
     "TafParsed",
@@ -255,6 +276,7 @@ __all__ = [
     "VrsRouteResult",
     "WeatherReport",
     "Webhook",
+    "WebhookEvent",
     "WebhookEventTypesResponse",
     "WebhookListResponse",
     "WebhookSubscription",

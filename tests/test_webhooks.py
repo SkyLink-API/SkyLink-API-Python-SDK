@@ -24,6 +24,7 @@ from skylink_api._exceptions import (
 )
 from skylink_api.models.webhooks import (
     Webhook,
+    WebhookEvent,
     WebhookSubscription,
     WebhookToggleResponse,
 )
@@ -356,6 +357,182 @@ def test_create_list_update_delete_round_trip(
     assert webhooks.delete(hook.id) is None
 
 
+# ── ensure ───────────────────────────────────────────────────────────────────
+#
+# The fixture list already holds a subscription on HOOK_URL with
+# ["status_changed", "flight_delayed"] and filters {"flight_number": "BA117"},
+# active — that is the "already correct" state every case below reconciles
+# against.
+
+LIVE_EVENTS = ["status_changed", "flight_delayed"]
+LIVE_FILTERS = {"flight_number": "BA117"}
+
+
+class Routes:
+    """The four webhook routes, mocked in one place so writes can be counted."""
+
+    def __init__(self, respx_mock: respx.MockRouter, *, listed: object = None) -> None:
+        self.list = respx_mock.get(f"{TEST_BASE_URL}/webhooks").mock(
+            return_value=httpx.Response(
+                200, json=listed if listed is not None else load_fixture("webhooks_list")
+            )
+        )
+        self.create = respx_mock.post(f"{TEST_BASE_URL}/webhooks").mock(
+            return_value=httpx.Response(201, json=load_fixture("webhook_created"))
+        )
+        self.update = respx_mock.patch(url__startswith=f"{TEST_BASE_URL}/webhooks/").mock(
+            return_value=httpx.Response(200, json={"id": HOOK_ID, "active": False})
+        )
+        self.delete = respx_mock.delete(url__startswith=f"{TEST_BASE_URL}/webhooks/").mock(
+            return_value=httpx.Response(204)
+        )
+
+    @property
+    def writes(self) -> tuple[int, int, int]:
+        """``(created, patched, deleted)`` — the whole point of ``ensure``."""
+
+        return (self.create.call_count, self.update.call_count, self.delete.call_count)
+
+
+def test_ensure_is_a_no_op_when_the_subscription_already_matches(
+    webhooks: Webhooks, respx_mock: respx.MockRouter
+) -> None:
+    routes = Routes(respx_mock)
+
+    hook = webhooks.ensure(HOOK_URL, LIVE_EVENTS, filters=LIVE_FILTERS)
+
+    assert routes.writes == (0, 0, 0)
+    assert routes.list.call_count == 1
+    # The existing row comes back, delivery health and all.
+    assert isinstance(hook, WebhookSubscription)
+    assert hook.id == HOOK_ID
+    assert hook.failure_count == 0
+
+
+def test_ensure_ignores_event_order_and_flight_number_case(
+    webhooks: Webhooks, respx_mock: respx.MockRouter
+) -> None:
+    """A subscription is a *set* of events, and the backend upper-cases the number."""
+
+    routes = Routes(respx_mock)
+
+    webhooks.ensure(
+        f"  {HOOK_URL} ",
+        ["flight_delayed", "status_changed"],
+        filters={"flight_number": "ba117"},
+    )
+
+    assert routes.writes == (0, 0, 0)
+
+
+def test_ensure_accepts_the_event_enum(webhooks: Webhooks, respx_mock: respx.MockRouter) -> None:
+    routes = Routes(respx_mock)
+
+    webhooks.ensure(
+        HOOK_URL,
+        [WebhookEvent.STATUS_CHANGED, WebhookEvent.FLIGHT_DELAYED],
+        filters=LIVE_FILTERS,
+    )
+
+    assert routes.writes == (0, 0, 0)
+
+
+def test_ensure_without_filters_does_not_compare_them(
+    webhooks: Webhooks, respx_mock: respx.MockRouter
+) -> None:
+    routes = Routes(respx_mock)
+
+    webhooks.ensure(HOOK_URL, LIVE_EVENTS)
+
+    assert routes.writes == (0, 0, 0)
+
+
+def test_ensure_creates_when_the_url_is_unknown(
+    webhooks: Webhooks, respx_mock: respx.MockRouter
+) -> None:
+    routes = Routes(respx_mock)
+
+    hook = webhooks.ensure(
+        "https://hooks.example.com/new", ["gate_changed"], filters={"flight_number": "LH400"}
+    )
+
+    assert routes.writes == (1, 0, 0)
+    assert json.loads(routes.create.calls.last.request.content) == {
+        "url": "https://hooks.example.com/new",
+        "event_types": ["gate_changed"],
+        "filters": {"flight_number": "LH400"},
+    }
+    assert isinstance(hook, Webhook)
+
+
+def test_ensure_patches_when_only_active_differs(
+    webhooks: Webhooks, respx_mock: respx.MockRouter
+) -> None:
+    """The one field ``PATCH /webhooks/{id}`` can change."""
+
+    routes = Routes(respx_mock)
+
+    hook = webhooks.ensure(HOOK_URL, LIVE_EVENTS, active=False, filters=LIVE_FILTERS)
+
+    assert routes.writes == (0, 1, 0)
+    assert routes.update.calls.last.request.url.path == f"/v3.1/webhooks/{HOOK_ID}"
+    assert json.loads(routes.update.calls.last.request.content) == {"active": False}
+    assert hook.active is False
+    assert hook.id == HOOK_ID
+
+
+def test_ensure_recreates_when_the_events_differ(
+    webhooks: Webhooks, respx_mock: respx.MockRouter
+) -> None:
+    """Events are immutable server-side — PATCH only takes ``active``."""
+
+    routes = Routes(respx_mock)
+
+    webhooks.ensure(HOOK_URL, ["gate_changed"], filters=LIVE_FILTERS)
+
+    assert routes.writes == (1, 0, 1)
+    # Deleted first, so the plan's active-subscription cap is never exceeded.
+    assert routes.delete.calls.last.request.url.path == f"/v3.1/webhooks/{HOOK_ID}"
+    assert json.loads(routes.create.calls.last.request.content)["event_types"] == ["gate_changed"]
+
+
+def test_ensure_recreates_when_the_filters_differ(
+    webhooks: Webhooks, respx_mock: respx.MockRouter
+) -> None:
+    routes = Routes(respx_mock)
+
+    webhooks.ensure(HOOK_URL, LIVE_EVENTS, filters={"flight_number": "LH400"})
+
+    assert routes.writes == (1, 0, 1)
+
+
+def test_ensure_creates_then_disables_when_active_is_false(
+    webhooks: Webhooks, respx_mock: respx.MockRouter
+) -> None:
+    """The API always creates enabled, so a paused subscription needs two calls."""
+
+    routes = Routes(respx_mock, listed={"count": 0, "webhooks": []})
+
+    hook = webhooks.ensure(HOOK_URL, LIVE_EVENTS, active=False, filters=LIVE_FILTERS)
+
+    assert routes.writes == (1, 1, 0)
+    assert hook.active is False
+
+
+def test_ensure_propagates_the_plan_cap_error(
+    webhooks: Webhooks, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.get(f"{TEST_BASE_URL}/webhooks").mock(
+        return_value=httpx.Response(200, json={"count": 0, "webhooks": []})
+    )
+    respx_mock.post(f"{TEST_BASE_URL}/webhooks").mock(
+        return_value=httpx.Response(422, json={"detail": "Webhook limit reached (1)."})
+    )
+
+    with pytest.raises(UnprocessableEntityError):
+        webhooks.ensure(HOOK_URL, LIVE_EVENTS, filters=LIVE_FILTERS)
+
+
 # ── async ────────────────────────────────────────────────────────────────────
 
 
@@ -379,6 +556,34 @@ async def test_async_create_and_list(
     assert rows[0].created_at is not None
     assert rows[0].last_triggered_at is not None
     assert rows[0].last_triggered_at - rows[0].created_at == timedelta(minutes=65, seconds=22)
+
+
+async def test_async_ensure_matches_the_sync_behaviour(
+    async_webhooks: AsyncWebhooks, respx_mock: respx.MockRouter
+) -> None:
+    routes = Routes(respx_mock)
+
+    unchanged = await async_webhooks.ensure(HOOK_URL, LIVE_EVENTS, filters=LIVE_FILTERS)
+    assert routes.writes == (0, 0, 0)
+    assert unchanged.id == HOOK_ID
+
+    paused = await async_webhooks.ensure(HOOK_URL, LIVE_EVENTS, active=False, filters=LIVE_FILTERS)
+    assert routes.writes == (0, 1, 0)
+    assert paused.active is False
+
+    await async_webhooks.ensure(HOOK_URL, ["gate_changed"], filters=LIVE_FILTERS)
+    assert routes.writes == (1, 1, 1)
+
+
+async def test_async_ensure_creates_an_unknown_url(
+    async_webhooks: AsyncWebhooks, respx_mock: respx.MockRouter
+) -> None:
+    routes = Routes(respx_mock, listed={"count": 0, "webhooks": []})
+
+    hook = await async_webhooks.ensure(HOOK_URL, LIVE_EVENTS, filters=LIVE_FILTERS)
+
+    assert routes.writes == (1, 0, 0)
+    assert hook.id == HOOK_ID
 
 
 async def test_async_delete_and_event_types(

@@ -2,7 +2,7 @@
 
 Run it with a key in the environment::
 
-    export SKYLINK_API_KEY=sk_live_...
+    export RAPIDAPI_KEY=...msh...jsn...   # or SKYLINK_API_KEY with provider="direct"
     python examples/weather.py
 """
 
@@ -90,8 +90,8 @@ def show_winds_aloft(sky: SkyLink) -> None:
 
 
 def main() -> None:
-    # api_key falls back to $SKYLINK_API_KEY; pass provider="rapidapi" to read
-    # $RAPIDAPI_KEY and talk to the marketplace edge instead.
+    # RapidAPI channel by default; api_key falls back to $RAPIDAPI_KEY (and to
+    # $SKYLINK_API_KEY). Pass provider="direct" for data.skylinkapi.com instead.
     try:
         with SkyLink() as sky:
             show_metar(sky)

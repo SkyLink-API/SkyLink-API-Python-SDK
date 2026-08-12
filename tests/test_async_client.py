@@ -23,7 +23,13 @@ import httpx
 import pytest
 import respx
 
-from conftest import TEST_API_KEY, TEST_BASE_URL, AsyncSleepRecorder, load_fixture
+from conftest import (
+    TEST_API_KEY,
+    TEST_BASE_URL,
+    TEST_PROVIDER,
+    AsyncSleepRecorder,
+    load_fixture,
+)
 from skylink_api import (
     AdsbAircraftList,
     AircraftLookup,
@@ -213,7 +219,7 @@ async def test_default_backoff_awaits_asyncio_sleep(
     )
 
     # No sleep= argument: the constructor default is _default_async_sleep.
-    async with AsyncSkyLink(api_key=TEST_API_KEY, environ={}) as sky:
+    async with AsyncSkyLink(api_key=TEST_API_KEY, provider=TEST_PROVIDER, environ={}) as sky:
         await sky.weather.metar("KJFK")
 
     assert route.call_count == 2
@@ -245,7 +251,7 @@ async def test_async_context_manager_yields_the_client_and_closes_it(
 ) -> None:
     _mock(respx_mock, "/weather/metar/KJFK", load_fixture("weather_metar"))
 
-    sky = AsyncSkyLink(api_key=TEST_API_KEY, environ={})
+    sky = AsyncSkyLink(api_key=TEST_API_KEY, provider=TEST_PROVIDER, environ={})
     async with sky as entered:
         assert entered is sky
         assert sky.http_client.is_closed is False
@@ -261,7 +267,7 @@ async def test_async_context_manager_closes_on_error(respx_mock: respx.MockRoute
         return_value=httpx.Response(404, json={"detail": "Airport not found"})
     )
 
-    sky = AsyncSkyLink(api_key=TEST_API_KEY, environ={}, max_retries=0)
+    sky = AsyncSkyLink(api_key=TEST_API_KEY, provider=TEST_PROVIDER, environ={}, max_retries=0)
     with pytest.raises(Exception, match="Airport not found"):
         async with sky:
             await sky.weather.metar("ZZZZ")
@@ -272,7 +278,7 @@ async def test_async_context_manager_closes_on_error(respx_mock: respx.MockRoute
 async def test_aclose_without_context_manager(respx_mock: respx.MockRouter) -> None:
     _mock(respx_mock, "/adsb/health", {"status": "healthy", "active_aircraft_count": 12})
 
-    sky = AsyncSkyLink(api_key=TEST_API_KEY, environ={})
+    sky = AsyncSkyLink(api_key=TEST_API_KEY, provider=TEST_PROVIDER, environ={})
     health = await sky.adsb.health()
     await sky.aclose()
 

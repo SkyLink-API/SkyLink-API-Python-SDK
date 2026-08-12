@@ -1,7 +1,7 @@
-"""Exception hierarchy and the parser for the API's three error body shapes.
+"""Exception hierarchy and the parser for the API's error body shapes.
 
-The backend never installs a custom exception handler, so exactly three shapes can
-come back:
+The backend never installs a custom exception handler, so exactly three shapes
+come out of the application:
 
 A. ``401`` from the auth middleware::
 
@@ -14,6 +14,18 @@ B. any ``HTTPException`` (400/403/404/422/500/503)::
 C. FastAPI request validation (``422``)::
 
        {"detail": [{"loc": ["query", "icao"], "msg": "...", "type": "..."}]}
+
+In front of it sits a gateway, and each channel's gateway answers in its own way
+when the request never reaches the application at all — both single-key objects,
+so shape A's reader handles them:
+
+D. the direct gateway (APISIX), for a path/method it does not route::
+
+       {"error_msg": "404 Route Not Found"}          (served as text/plain)
+
+E. the RapidAPI edge, for a path the listing does not declare::
+
+       {"message": "Endpoint '/nope' does not exist"}
 
 Anything else (HTML from a proxy, empty body, plain text) degrades to a generic
 ``HTTP <status>`` message with the raw payload kept on ``.body``.
@@ -192,7 +204,7 @@ class RateLimitError(APIStatusError):
         **kwargs: Any,
     ) -> None:
         super().__init__(message, **kwargs)
-        #: Quota snapshot from the ``X-RateLimit-Requests-*`` headers, if present.
+        #: Quota snapshot from the channel's rate-limit headers, if present.
         self.rate_limit = rate_limit
         #: ``Retry-After`` in seconds (HTTP-dates are converted), capped at 60s.
         self.retry_after = retry_after
@@ -241,7 +253,7 @@ def _as_validation_item(raw: Mapping[str, Any]) -> ValidationErrorItem:
 
 
 def parse_error_body(body: object, *, status_code: int) -> ParsedErrorBody:
-    """Normalise any of the three documented error bodies (plus junk) into one shape."""
+    """Normalise any documented error body (plus junk) into one shape."""
 
     fallback = f"HTTP {status_code}"
 
@@ -262,10 +274,12 @@ def parse_error_body(body: object, *, status_code: int) -> ParsedErrorBody:
         if isinstance(detail, str) and detail.strip():
             return ParsedErrorBody(detail.strip()[:_MAX_MESSAGE_LENGTH])
 
-        # Shape A — gateway envelope.
+        # Shapes A, D and E — the gateways' single-key envelopes. ``error_msg`` is
+        # APISIX's ("404 Route Not Found" for an unrouted path or method), which
+        # would otherwise degrade to a bare ``HTTP 404``.
         code = body.get("code")
         code_str = code if isinstance(code, str) and code else None
-        for key in ("message", "error"):
+        for key in ("message", "error", "error_msg"):
             value = body.get(key)
             if isinstance(value, str) and value.strip():
                 return ParsedErrorBody(value.strip()[:_MAX_MESSAGE_LENGTH], code=code_str)

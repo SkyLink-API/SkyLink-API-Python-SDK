@@ -15,7 +15,7 @@ jittered backoff, and a typed error hierarchy. Ships `py.typed`.
 ```python
 from skylink_api import SkyLink
 
-with SkyLink() as sky:                                  # $SKYLINK_API_KEY
+with SkyLink() as sky:                                  # RapidAPI, $RAPIDAPI_KEY
     metar = sky.weather.metar("KJFK", parsed=True)
     traffic = sky.adsb.aircraft(lat=51.47, lon=-0.46, radius=75)
     status = sky.flight_status("BA117")
@@ -25,39 +25,54 @@ with SkyLink() as sky:                                  # $SKYLINK_API_KEY
 
 ```bash
 pip install skylink-api
+pip install "skylink-api[pandas]"     # optional: DataFrame conversion, see below
 ```
 
 Requires Python 3.10+. Runtime dependencies: `httpx` and `pydantic` v2.
 
 ## Quickstart
 
-### Direct channel
+### RapidAPI channel (default)
 
-Reads `SKYLINK_API_KEY` from the environment and talks to `https://data.skylinkapi.com/v3.1`.
+`SkyLink()` targets `https://skylink-api.p.rapidapi.com` (no version prefix — the listing
+is pinned to v3.1), sends `X-RapidAPI-Key`/`X-RapidAPI-Host`, and reads the key from
+`RAPIDAPI_KEY`.
 
 ```python
 from skylink_api import SkyLink
 
-with SkyLink() as sky:
+with SkyLink() as sky:                                  # $RAPIDAPI_KEY
     metar = sky.weather.metar("KJFK")
     print(metar.raw)
 
 # or pass the key explicitly
-sky = SkyLink(api_key="sk_live_...")
+sky = SkyLink(api_key="...msh...jsn...")
 ```
 
-### RapidAPI channel
+### Direct channel
 
-Reads `RAPIDAPI_KEY`, sends `X-RapidAPI-Key`/`X-RapidAPI-Host`, and targets
-`https://skylink-api.p.rapidapi.com` (no version prefix — the listing is pinned to v3.1).
-Everything else is identical.
+`provider="direct"` talks to `https://data.skylinkapi.com/v3.1` with an `x-api-key` header
+and reads `SKYLINK_API_KEY`. Everything else is identical — same methods, same models.
 
 ```python
 from skylink_api import SkyLink
 
-with SkyLink(provider="rapidapi") as sky:               # $RAPIDAPI_KEY
+with SkyLink(provider="direct") as sky:                 # $SKYLINK_API_KEY
     charts = sky.charts.by_airport("EGLL")
 ```
+
+### API keys and environment variables
+
+| Channel | Base URL | Auth header | Environment |
+| --- | --- | --- | --- |
+| `rapidapi` (default) | `https://skylink-api.p.rapidapi.com` | `X-RapidAPI-Key` + `X-RapidAPI-Host` | `RAPIDAPI_KEY`, then `SKYLINK_API_KEY` |
+| `direct` | `https://data.skylinkapi.com/v3.1` | `x-api-key` | `SKYLINK_API_KEY` |
+
+The default channel accepts `SKYLINK_API_KEY` as a fallback, so a key exported under the
+neutral name is picked up by a plain `SkyLink()`. The reverse never happens: a RapidAPI
+subscription key is not valid on `data.skylinkapi.com`, so `provider="direct"` never reads
+`RAPIDAPI_KEY`. A blank variable counts as unset, and a missing key raises
+`AuthenticationError` at construction time (unless you pass `base_url`).
 
 ### Async
 
@@ -87,8 +102,8 @@ Every option is keyword-only and accepted by both clients.
 
 | Option | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `provider` | `"direct" \| "rapidapi"` | `"direct"` | Selects the base URL, the auth header and the key env var. |
-| `api_key` | `str \| None` | `$SKYLINK_API_KEY` / `$RAPIDAPI_KEY` | Missing key raises `AuthenticationError` at construction — unless `base_url` is set. |
+| `provider` | `"rapidapi" \| "direct"` | `"rapidapi"` | Selects the base URL, the auth header and the key env var. |
+| `api_key` | `str \| None` | `$RAPIDAPI_KEY` → `$SKYLINK_API_KEY` (rapidapi), `$SKYLINK_API_KEY` (direct) | Missing key raises `AuthenticationError` at construction — unless `base_url` is set. |
 | `base_url` | `str \| None` | provider default | Used verbatim; no version is appended. With it, a missing key is allowed (staging with `DISABLE_AUTH=true`). |
 | `timeout` | `float \| httpx.Timeout \| None` | connect 5s, read/write 30s, pool 5s | `None` disables timeouts entirely. |
 | `max_retries` | `int` | `3` | Applies to retryable statuses and transport failures. `0` disables. |
@@ -107,6 +122,10 @@ and `sky.last_rate_limit`.
 Every method also accepts `request_options: RequestOptions | None` (see
 [Retries and timeouts](#retries-and-timeouts)). Async methods are identical, awaited.
 Namespaces are lazy `cached_property` objects: building a client costs nothing.
+
+The SDK-side namespaces — `sky.batch`, `sky.poll`, `sky.compose` — plus the page iterators,
+the pure helpers, the response cache and the pandas bridge are documented under
+[Beyond the endpoints](#beyond-the-endpoints).
 
 ### `sky.weather`
 
@@ -317,6 +336,202 @@ and error handling, with an optional pydantic `cast_to`:
 raw = sky.request("GET", "/weather/metar/KJFK", query={"parsed": True})
 ```
 
+## Beyond the endpoints
+
+Everything below is SDK-side: three extra namespaces that combine calls, iterators over the
+paged endpoints, a module of pure helpers, an opt-in cache and the pandas bridge. No new
+runtime dependency, and nothing here changes how a plain endpoint call behaves.
+
+### `sky.batch` — one call, many identifiers
+
+The API is one-identifier-per-request. `sky.batch` fans that out with bounded concurrency
+(default 5, because of marketplace quotas), collapses duplicates and returns a
+`{identifier: value | SkyLinkError}` mapping — **one bad code costs one value, not the batch**.
+
+```python
+from skylink_api import SkyLinkError
+from skylink_api.helpers.batch import failures, successes
+
+reports = sky.batch.metars(["EGLL", "KJFK", "ZZZZ"], concurrency=3)
+for icao, report in reports.items():        # keys are your strings, in input order
+    if isinstance(report, SkyLinkError):
+        print(icao, "unavailable")
+    else:
+        print(icao, report.raw)
+
+good, bad = successes(reports), failures(reports)
+```
+
+| Method | Per identifier | Value type |
+| --- | --- | --- |
+| `batch.metars(icaos)` | `GET /weather/metar/{icao}` | `Metar` |
+| `batch.tafs(icaos)` | `GET /weather/taf/{icao}` | `Taf` |
+| `batch.notams(icaos)` | `GET /notams/{icao}` | `NotamsResponse` |
+| `batch.airports(codes)` | `GET /airports/search` | `EnrichedAirport` |
+| `batch.flight_statuses(numbers)` | `GET /flight_status/{number}` | `FlightStatusResponse` |
+
+All take `concurrency=5` and `request_options=None`. `batch.airports()` picks `icao=` or
+`iata=` from the shape of each code; OurAirports pseudo-codes (`GB-0888`) cannot be resolved
+by that endpoint and land in the result as errors — filter them with
+`helpers.idents.is_local_pseudocode` first. `helpers.batch.raise_for_errors(results)` turns
+the first failure into an exception when a partial answer is not acceptable, and
+`helpers.batch.map_concurrent` / `amap_concurrent` are the same primitive for your own calls.
+
+### `sky.compose` — the page, not the endpoint
+
+An "airport page" is eight requests; a "flight page" is four. `sky.compose` issues them in
+parallel and returns one dataclass. **A part that fails is `None` and its error lands in
+`.errors[part]` — the aggregate degrades, it does not raise.** The single exception is the
+primary request (`airports.search` for `airport_brief`, the flight status for `flight_brief`),
+without which the result would be meaningless.
+
+```python
+brief = sky.compose.airport_brief("EGLL", schedules_limit=5)
+print(brief.metar.raw if brief.metar else "no observation")
+print(brief.errors)          # {'delays': NotFoundError(...)} — EGLL is not an FAA field
+```
+
+| Method | Returns | Notes |
+| --- | --- | --- |
+| `compose.airport_brief(icao, *, include=None, exclude=None, schedules_limit=10)` | `AirportBrief` | airport, metar, taf, notams, delays, charts, departures, arrivals |
+| `compose.flight_brief(number, *, include=None, exclude=None)` | `FlightBrief` | status → airframe → route → CO2 (a chain, not a fan-out) |
+| `compose.route_brief(origin, destination, *, include=None, exclude=None, aircraft_type=None, passengers=None)` | `RouteBrief` | distance, block time, both ends' weather, CO2 |
+| `compose.enrich_adsb(states, *, concurrency=5, max_lookups=50, photos=False)` | `list[EnrichedAircraft]` | joins live contacts with the airframe registry, memoised per `icao24` |
+| `compose.schedules_with_status(icao, *, direction="departures", limit=10, concurrency=5)` | `list[ScheduleWithStatus]` | board rows plus each flight's live status |
+| `compose.north_america_countries()` | `list[Country]` | **backend-bug workaround**, see below |
+
+`include=` is the exact set of parts to request (so an unwanted part costs no quota),
+`exclude=` subtracts from the full set; passing both is a `ValueError`, and the part names are
+the result's own field names (`AIRPORT_BRIEF_PARTS`, `FLIGHT_BRIEF_PARTS`, `ROUTE_BRIEF_PARTS`
+in `skylink_api.resources.compose`). A part that was never requested is `None` with **no**
+entry in `errors`, so "not asked for" and "asked for and failed" stay distinguishable.
+
+> `north_america_countries()` exists because `geo.countries(continent="NA")` returns nothing:
+> the backend reads its CSV with pandas, which parses the literal `NA` as *not-a-number*, so
+> every North American country arrives with `continent: null`. The method fetches the full
+> list and returns the rows whose continent is empty (or already `"NA"`, so it keeps working
+> once the backend is fixed). Same warning is attached to the `CONTINENTS` constant.
+
+### Iterators and pollers
+
+Paging and "ask again in a minute" are the two loops every integration writes by hand.
+
+```python
+for aircraft in sky.adsb.iter_aircraft(bbox=box, page_size=100, max_items=500):
+    ...                       # the only paginated endpoint; stops on a short page
+
+for flight in sky.history.iter_flights(registration="G-STBA", window_days=7, max_items=50):
+    ...                       # slices a long range into per-window requests, newest first
+
+for diff in sky.poll.adsb(bbox=box, interval=10, max_iterations=6):
+    if diff.is_first:
+        draw_all(diff.snapshot.values())
+        continue
+    add(diff.appeared); remove(diff.disappeared); move(diff.updated)
+
+for status in sky.poll.flight_status("BA117", interval=60):
+    print(status.status)      # only when it changed; stops itself once the flight lands
+```
+
+* The first request goes out immediately; `interval` is the pause **between** requests.
+* `429` and `5xx` are survived (waiting out `Retry-After`) and count against `max_iterations`;
+  `401`/`403`/`422` propagate — a wrong key never fixes itself.
+* `poll.adsb` yields an `AdsbDiff` (`appeared`, `disappeared` as `icao24` strings, `updated`,
+  `snapshot`, `is_first`); "updated" means position, altitude or ground speed moved —
+  `last_seen` is deliberately ignored, or every aircraft would be updated on every tick.
+* `poll.flight_status` compares status prose plus times, gates, terminals and the baggage belt,
+  with `""`/`"--"` folded to "unknown"; terminal is a case-insensitive substring match on
+  landed/arrived/cancelled/diverted. Pair `until_terminal=True` with `max_iterations` for a
+  flight number you do not trust — an unknown flight stays `"Unknown"` forever.
+* `sleep=` is injectable on both, and the async client returns `AsyncIterator`s from the same
+  method names.
+
+### `skylink_api.helpers` — pure functions, no client
+
+```python
+from skylink_api import helpers
+from skylink_api.helpers.geojson import adsb_to_geojson
+from skylink_api.helpers.weather import flight_category
+
+box = helpers.bbox_around(51.4706, -0.4619, radius_km=60)
+live = sky.adsb.aircraft(bbox=box)
+layer = adsb_to_geojson(live)                         # [lon, lat], per RFC 7946
+category = flight_category(sky.weather.metar("EGLL", parsed=True))    # 'VFR' | 'MVFR' | ...
+```
+
+| Module | Contents |
+| --- | --- |
+| `helpers.units` | `ft_to_m`, `kt_to_kmh`, `inhg_to_hpa`, `c_to_f`, … plus `normalize_altimeter` (the API sends pressure **without a unit**), `parse_visibility` (`"P6SM"`, `"M1/4SM"`, `9999`), `parse_duration_minutes`/`parse_duration` (`"7h 23m"`), `humidity_to_percent` |
+| `helpers.spatial` | `bbox`, `bbox_around`, `parse_bbox`, `haversine_km`/`_nm`, `initial_bearing`, `destination_point`, `great_circle_points`, `track_stats`, `simplify_track`, `point_coords` |
+| `helpers.weather` | `flight_category`, `ceiling_ft`, `metar_age`, `is_stale`, `wind_components` (head/tail and crosswind for a runway) |
+| `helpers.geojson` | `adsb_to_geojson`, `track_to_geojson`, `airports_to_geojson`, `navaids_to_geojson` — plain `TypedDict`s, always `[longitude, latitude]` |
+| `helpers.idents` | `classify_airport_code`, `is_local_pseudocode`, `is_icao24`, `normalize_icao24`, `normalize_registration`, `split_flight_number` |
+| `helpers.sentinels` | `is_found`/`require_found`, `has_results`/`require_results`, `require_ip_result` — turn the 200-with-a-sentinel answers into exceptions where a miss *is* fatal |
+| `helpers.batch` | `map_concurrent`, `amap_concurrent`, `successes`, `failures`, `raise_for_errors` |
+| `helpers.cache` | `MemoryCache`, `CacheProtocol` — see below |
+
+Every converter accepts `str | float | int | None` (the API serves numbers as strings often
+enough) and returns `None` rather than raising on input it cannot read.
+
+### Response cache and quota hooks
+
+The cache is **off by default**, and a bare `MemoryCache()` is inert: TTLs are opt-in per
+operation. Only successful `GET`s are cached, keyed by
+`provider | base_url | METHOD path?sorted-query`, and a hit re-validates the stored payload,
+so a caller who mutates a returned model cannot corrupt the next one's copy.
+
+```python
+from skylink_api import MemoryCache, SkyLink
+
+cache = MemoryCache(ttls={"weather.metar": 60, "airports.*": 3600, "geo.*": 86_400})
+with SkyLink(cache=cache) as sky:                 # "adsb.aircraft" left out on purpose
+    sky.weather.metar("EGLL")                     # network
+    sky.weather.metar("EGLL")                     # cache
+
+    stop = sky.on_rate_limit(lambda info: print(info.remaining, "of", info.limit))
+    sky.on_quota_low(warn, threshold=0.1)         # edge-triggered: fires once per window
+    stop()                                        # unsubscribe
+```
+
+TTL lookup is by exact operation name, then by namespace prefix (`"weather.*"`), then
+`default_ttl`; `0` means "do not cache". Any store with `get(key)`/`set(key, value, ttl)`
+satisfies `CacheProtocol` (Redis, diskcache, …), and a cache that raises is degraded to no
+cache with a `RuntimeWarning` rather than failing the request. `on_rate_limit` receives the
+snapshot of *that* response (unlike `last_rate_limit`, which is last-writer-wins under
+concurrency); a hook that raises is reported as a warning and never breaks the call.
+
+### `from_env` and `with_options`
+
+```python
+sky = SkyLink.from_env(provider="direct")         # key can only come from the environment
+patient = sky.with_options(timeout=120.0, max_retries=0)
+archive = sky.with_options(history_plan="mega")
+```
+
+`with_options` reuses the same `httpx` client — no second connection pool — copies the
+registered hooks as a snapshot and shares the cache unless you pass `cache=`. Ownership of the
+transport stays with the original: keep it alive for as long as any clone is in use.
+
+### pandas
+
+```python
+from skylink_api.pandas_ext import to_dataframe          # pip install "skylink-api[pandas]"
+
+frame = to_dataframe(sky.adsb.aircraft(bbox=box))        # rows from the "aircraft" field
+frame = to_dataframe(sky.schedules.departures("EGLL"))   # ... "flights"
+frame = to_dataframe(sky.history.track(flight_id))       # ... "positions"
+frame = to_dataframe(page.aircraft)                      # a bare list works too
+```
+
+`to_dataframe` is a free function, not a model method: pandas stays out of the SDK's own type
+annotations and is imported on first call. It unwraps the list-shaped envelopes
+(`aircraft`, `positions`, `flights`, `navaids`, `countries`, `regions`, `airports`, `notams`,
+`reports`, `stations`, `routes`, `sources` — `pandas_ext.LIST_FIELDS`), a bare list of models
+or a bare list of dicts; `field="flights"` picks the other list on a response that carries
+two. Nothing is coerced on the way in, so the string-typed columns described under
+[Gotchas](#gotchas) stay strings. Without pandas installed the call raises `ImportError`
+naming the extra.
+
 ## Error handling
 
 ```
@@ -385,10 +600,12 @@ if flights.count == 0:
 
 ### Quota
 
-`sky.last_rate_limit` holds a `RateLimitInfo(limit, remaining, reset)` parsed from the
-`X-RateLimit-Requests-*` headers of the most recent successful response. It stays `None` when
-the response carried no quota headers (for example against a staging instance that does not
-go through the marketplace gateway). On a 429 the same snapshot is on
+`sky.last_rate_limit` holds a `RateLimitInfo(limit, remaining, reset)` parsed from the quota
+headers of the most recent response. Both channels are understood: RapidAPI sends
+`X-RateLimit-Requests-*` (the plan's request quota, which wins over the marketplace's noisier
+`X-RateLimit-rapid-free-plans-hard-limit-*` counters), the direct gateway sends
+`X-RateLimit-*`. It stays `None` when the response carried no quota headers at all — for
+example against a staging instance behind neither gateway. On a 429 the same snapshot is on
 `RateLimitError.rate_limit`.
 
 ## Retries and timeouts
@@ -457,9 +674,14 @@ Runnable scripts in [`examples/`](examples):
 | [`history.py`](examples/history.py) | Archived flights, track, both position lookups, the `mega` plan |
 | [`webhooks.py`](examples/webhooks.py) | Full create → list → update → delete cycle plus `event_types()` |
 | [`async_usage.py`](examples/async_usage.py) | `AsyncSkyLink` with `asyncio.gather` fan-out |
+| [`batch_requests.py`](examples/batch_requests.py) | `sky.batch` over many identifiers, reading successes and failures |
+| [`airport_brief.py`](examples/airport_brief.py) | `sky.compose.airport_brief` / `route_brief`, `include=`, and printing `errors` |
+| [`polling.py`](examples/polling.py) | `poll.adsb` diffs, `poll.flight_status` until landed, `iter_aircraft` |
+| [`map_export.py`](examples/map_export.py) | `bbox_around`, `flight_category`, `wind_components`, GeoJSON layers written to disk |
+| [`cache_and_quota.py`](examples/cache_and_quota.py) | `MemoryCache` TTLs, `on_rate_limit`/`on_quota_low`, `from_env`, `with_options` |
 
 ```bash
-export SKYLINK_API_KEY=sk_live_...
+export RAPIDAPI_KEY=...msh...jsn...     # or SKYLINK_API_KEY with provider="direct"
 python examples/weather.py
 ```
 
@@ -485,7 +707,9 @@ Fixtures under `tests/fixtures/` are extracted from the backend routers — see
 Integration tests are gated on an environment variable and skipped otherwise:
 
 ```bash
+SKYLINK_TEST_API_KEY=...msh...jsn... pytest tests/integration          # RapidAPI (default)
 SKYLINK_TEST_BASE_URL=http://localhost:8081/v3.1 pytest tests/integration
+SKYLINK_TEST_PROVIDER=direct SKYLINK_TEST_API_KEY=sk_live_... pytest tests/integration
 ```
 
 Publishing is automated: pushing a `v*` tag builds the distribution and uploads it to PyPI via

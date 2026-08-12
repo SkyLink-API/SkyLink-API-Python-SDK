@@ -23,7 +23,7 @@ which the API generates itself as ISO-8601 with ``Z``, is a real ``datetime``.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import Field
 
@@ -158,6 +158,8 @@ class MetarParsed(SkyLinkModel):
 
 class WeatherReport(SkyLinkModel):
     """Fields common to the METAR and TAF envelopes."""
+
+    __repr_fields__: ClassVar[tuple[str, ...]] = ("icao", "timestamp", "raw")
 
     raw: str | None = None
     """The report exactly as issued."""

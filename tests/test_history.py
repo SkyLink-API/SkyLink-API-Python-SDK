@@ -7,14 +7,14 @@ Fixtures are hand-built from the SQL SELECT lists in
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 import pytest
 import respx
 
-from conftest import TEST_API_KEY, TEST_BASE_URL, load_fixture
+from conftest import TEST_API_KEY, TEST_BASE_URL, TEST_PROVIDER, load_fixture
 from skylink_api._client import AsyncSkyLink, SkyLink
 from skylink_api._exceptions import NotFoundError
 from skylink_api.models.history import (
@@ -89,7 +89,9 @@ def test_per_call_plan_changes_the_path(history: History, respx_mock: respx.Mock
 def test_client_history_plan_is_the_fallback(respx_mock: respx.MockRouter) -> None:
     route = _mock(respx_mock, "/mega/history/flights", load_fixture("history_flights"))
 
-    with SkyLink(api_key=TEST_API_KEY, history_plan="mega", environ={}) as sky:
+    with SkyLink(
+        api_key=TEST_API_KEY, provider=TEST_PROVIDER, history_plan="mega", environ={}
+    ) as sky:
         History(sky).flights(callsign="BAW117")
 
     assert route.calls.last.request.url.path == "/v3.1/mega/history/flights"
@@ -98,7 +100,9 @@ def test_client_history_plan_is_the_fallback(respx_mock: respx.MockRouter) -> No
 def test_per_call_plan_beats_the_client_plan(respx_mock: respx.MockRouter) -> None:
     route = _mock(respx_mock, "/ultra/history/flights", load_fixture("history_flights"))
 
-    with SkyLink(api_key=TEST_API_KEY, history_plan="mega", environ={}) as sky:
+    with SkyLink(
+        api_key=TEST_API_KEY, provider=TEST_PROVIDER, history_plan="mega", environ={}
+    ) as sky:
         History(sky).flights(callsign="BAW117", plan="ultra")
 
     assert route.calls.last.request.url.path == "/v3.1/ultra/history/flights"
@@ -248,6 +252,326 @@ def test_flights_without_a_filter_never_reaches_the_network(
         history.flights()
 
     assert route.call_count == 0
+
+
+# ── iter_flights (window slicing) ────────────────────────────────────────────
+
+START = datetime(2026, 1, 1, tzinfo=timezone.utc)
+END = datetime(2026, 1, 22, tzinfo=timezone.utc)  # exactly three 7-day windows
+
+
+def _flight_row(flight_id: str | None, **overrides: Any) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "flight_id": flight_id,
+        "icao24": "4CA1FB",
+        "callsign": "BAW117",
+        "flight_state": "ARCHIVED",
+    }
+    row.update(overrides)
+    return row
+
+
+def _flights_page(*rows: dict[str, Any]) -> dict[str, Any]:
+    return {"filters": {"icao24": "4ca1fb"}, "count": len(rows), "flights": list(rows)}
+
+
+def _windows(
+    respx_mock: respx.MockRouter, *payloads: dict[str, Any], plan: str = "ultra"
+) -> respx.Route:
+    return respx_mock.get(url__startswith=f"{TEST_BASE_URL}/{plan}/history/flights").mock(
+        side_effect=[httpx.Response(200, json=payload) for payload in payloads]
+    )
+
+
+def _ranges(route: respx.Route) -> list[tuple[str | None, str | None]]:
+    return [
+        (call.request.url.params.get("start"), call.request.url.params.get("end"))
+        for call in route.calls
+    ]
+
+
+def test_iter_flights_walks_windows_newest_first(
+    history: History, respx_mock: respx.MockRouter
+) -> None:
+    route = _windows(
+        respx_mock,
+        _flights_page(_flight_row("f-newest")),
+        _flights_page(_flight_row("f-middle")),
+        _flights_page(_flight_row("f-oldest")),
+    )
+
+    found = list(history.iter_flights(icao24="4ca1fb", start=START, end=END, window_days=7))
+
+    assert [flight.flight_id for flight in found] == ["f-newest", "f-middle", "f-oldest"]
+    assert [flight.flight_state for flight in found] == ["ARCHIVED"] * 3
+    assert _ranges(route) == [
+        ("2026-01-15T00:00:00+00:00", "2026-01-22T00:00:00+00:00"),
+        ("2026-01-08T00:00:00+00:00", "2026-01-15T00:00:00+00:00"),
+        ("2026-01-01T00:00:00+00:00", "2026-01-08T00:00:00+00:00"),
+    ]
+
+
+def test_iter_flights_last_window_is_clipped_to_start(
+    history: History, respx_mock: respx.MockRouter
+) -> None:
+    """A range that is not a whole number of windows ends with a short one."""
+
+    route = _windows(respx_mock, _flights_page(), _flights_page())
+
+    list(
+        history.iter_flights(
+            callsign="BAW117",
+            start=datetime(2026, 1, 18, tzinfo=timezone.utc),
+            end=END,
+            window_days=3,
+        )
+    )
+
+    assert _ranges(route) == [
+        ("2026-01-19T00:00:00+00:00", "2026-01-22T00:00:00+00:00"),
+        ("2026-01-18T00:00:00+00:00", "2026-01-19T00:00:00+00:00"),
+    ]
+
+
+def test_iter_flights_deduplicates_across_touching_windows(
+    history: History, respx_mock: respx.MockRouter
+) -> None:
+    """Window edges touch, so a flight on the boundary comes back twice."""
+
+    _windows(
+        respx_mock,
+        _flights_page(_flight_row("f-1"), _flight_row("f-edge")),
+        _flights_page(_flight_row("f-edge"), _flight_row("f-2")),
+        _flights_page(_flight_row("f-1")),  # backend repeat, already seen
+    )
+
+    found = list(history.iter_flights(icao24="4ca1fb", start=START, end=END, window_days=7))
+
+    assert [flight.flight_id for flight in found] == ["f-1", "f-edge", "f-2"]
+
+
+def test_iter_flights_deduplicates_rows_without_a_flight_id(
+    history: History, respx_mock: respx.MockRouter
+) -> None:
+    row = _flight_row(None, flight_start="2026-01-20T09:00:00+00:00")
+    _windows(respx_mock, _flights_page(row), _flights_page(row), _flights_page())
+
+    found = list(history.iter_flights(icao24="4ca1fb", start=START, end=END, window_days=7))
+
+    assert len(found) == 1
+
+
+def test_iter_flights_max_items_stops_mid_window(
+    history: History, respx_mock: respx.MockRouter
+) -> None:
+    route = _windows(
+        respx_mock,
+        _flights_page(_flight_row("f-1"), _flight_row("f-2"), _flight_row("f-3")),
+        _flights_page(_flight_row("f-4")),
+    )
+
+    found = list(
+        history.iter_flights(icao24="4ca1fb", start=START, end=END, window_days=7, max_items=2)
+    )
+
+    assert [flight.flight_id for flight in found] == ["f-1", "f-2"]
+    assert route.call_count == 1  # no request for the remaining windows
+
+
+def test_iter_flights_empty_windows_are_skipped_not_stopped_on(
+    history: History, respx_mock: respx.MockRouter
+) -> None:
+    """An aircraft that did not fly last week still flew the week before."""
+
+    route = _windows(
+        respx_mock,
+        _flights_page(),
+        _flights_page(),
+        _flights_page(_flight_row("f-old")),
+    )
+
+    found = list(history.iter_flights(icao24="4ca1fb", start=START, end=END, window_days=7))
+
+    assert [flight.flight_id for flight in found] == ["f-old"]
+    assert route.call_count == 3
+
+
+def test_iter_flights_note_response_is_not_an_error(
+    history: History, respx_mock: respx.MockRouter
+) -> None:
+    """Unknown registration ⇒ 200 + note in every window; the walk just ends empty."""
+
+    _windows(
+        respx_mock,
+        load_fixture("history_empty_note"),
+        load_fixture("history_empty_note"),
+        load_fixture("history_empty_note"),
+    )
+
+    assert list(history.iter_flights(registration="G-ZZZZ", start=START, end=END)) == []
+
+
+def test_iter_flights_defaults_to_the_plan_window(
+    history: History, respx_mock: respx.MockRouter
+) -> None:
+    """No start/end ⇒ the plan's whole span (90 days on ultra) in 7-day slices."""
+
+    route = _windows(respx_mock, *([_flights_page()] * 13))
+
+    list(history.iter_flights(icao24="4ca1fb"))
+
+    assert route.call_count == 13  # ceil(90 / 7)
+    newest_start, newest_end = _ranges(route)[0]
+    assert newest_start is not None and newest_end is not None
+    span = datetime.fromisoformat(newest_end) - datetime.fromisoformat(newest_start)
+    assert span == timedelta(days=7)
+
+
+def test_iter_flights_mega_plan_window_is_a_year(
+    history: History, respx_mock: respx.MockRouter
+) -> None:
+    route = _windows(respx_mock, *([_flights_page()] * 13), plan="mega")
+
+    list(history.iter_flights(icao24="4ca1fb", plan="mega", window_days=30, max_items=1))
+
+    # 365 days in 30-day slices = 13 windows; all empty, so all are requested.
+    assert route.call_count == 13
+    assert route.calls.last.request.url.path == "/v3.1/mega/history/flights"
+
+
+def test_iter_flights_limit_defaults_to_the_plan_maximum(
+    history: History, respx_mock: respx.MockRouter
+) -> None:
+    """The API's own default is 100 rows — too low to walk a window safely."""
+
+    ultra = _windows(respx_mock, _flights_page())
+    list(history.iter_flights(icao24="4ca1fb", start=START, end=END, window_days=30))
+    assert ultra.calls.last.request.url.params["limit"] == "1000"
+
+    respx_mock.reset()
+    mega = _windows(respx_mock, _flights_page(), plan="mega")
+    list(history.iter_flights(icao24="4ca1fb", start=START, end=END, window_days=30, plan="mega"))
+    assert mega.calls.last.request.url.params["limit"] == "2000"
+
+    respx_mock.reset()
+    explicit = _windows(respx_mock, _flights_page())
+    list(history.iter_flights(icao24="4ca1fb", start=START, end=END, window_days=30, limit=5))
+    assert explicit.calls.last.request.url.params["limit"] == "5"
+
+
+def test_iter_flights_accepts_strings_and_dates_for_the_range(
+    history: History, respx_mock: respx.MockRouter
+) -> None:
+    route = _windows(respx_mock, _flights_page())
+
+    list(
+        history.iter_flights(
+            icao24="4ca1fb",
+            start="2026-01-20",
+            end="2026-01-22T00:00:00Z",
+            window_days=7,
+        )
+    )
+
+    assert _ranges(route) == [("2026-01-20T00:00:00+00:00", "2026-01-22T00:00:00+00:00")]
+
+
+def test_iter_flights_naive_datetimes_are_read_as_utc(
+    history: History, respx_mock: respx.MockRouter
+) -> None:
+    route = _windows(respx_mock, _flights_page())
+
+    list(
+        history.iter_flights(
+            icao24="4ca1fb",
+            start=datetime(2026, 1, 20),
+            end=datetime(2026, 1, 22),
+            window_days=7,
+        )
+    )
+
+    assert _ranges(route) == [("2026-01-20T00:00:00+00:00", "2026-01-22T00:00:00+00:00")]
+
+
+def test_iter_flights_without_a_filter_never_reaches_the_network(
+    history: History, respx_mock: respx.MockRouter
+) -> None:
+    """Same client-side guard as ``flights()``, and it fires from the call itself."""
+
+    route = respx_mock.get(url__startswith=f"{TEST_BASE_URL}/ultra/history/flights")
+
+    with pytest.raises(ValueError, match="at least one filter"):
+        history.iter_flights()
+
+    assert route.call_count == 0
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"window_days": 0},
+        {"window_days": -3},
+        {"window_days": "7"},  # not a number
+        {"max_items": 0},
+        {"start": "not-a-date"},
+        {"start": END, "end": START},  # inverted
+    ],
+)
+def test_iter_flights_rejects_bad_windows_before_any_request(
+    history: History, respx_mock: respx.MockRouter, kwargs: Any
+) -> None:
+    route = respx_mock.get(url__startswith=f"{TEST_BASE_URL}/ultra/history/flights")
+    call_kwargs: dict[str, Any] = {"icao24": "4ca1fb", "start": START, "end": END}
+    call_kwargs.update(kwargs)
+
+    with pytest.raises(ValueError):
+        history.iter_flights(**call_kwargs)
+
+    assert route.call_count == 0
+
+
+def test_iter_flights_window_cap_follows_the_plan(
+    history: History, respx_mock: respx.MockRouter
+) -> None:
+    """A 91-day slice is a 422 on ultra but legal on mega — so it is clamped only there.
+
+    The range asked for is 200 days: on ultra it is cut into 90-day slices
+    (three requests), on mega a 91-day slice stands (three requests too, but
+    with different edges — the first one really is 91 days wide).
+    """
+
+    long_start = END - timedelta(days=200)
+
+    ultra = _windows(respx_mock, *([_flights_page()] * 3))
+    list(history.iter_flights(icao24="4ca1fb", start=long_start, end=END, window_days=91))
+    newest_start, newest_end = _ranges(ultra)[0]
+    assert newest_start is not None and newest_end is not None
+    assert datetime.fromisoformat(newest_end) - datetime.fromisoformat(newest_start) == timedelta(
+        days=90
+    )
+
+    respx_mock.reset()
+    mega = _windows(respx_mock, *([_flights_page()] * 3), plan="mega")
+    list(
+        history.iter_flights(
+            icao24="4ca1fb", start=long_start, end=END, window_days=91, plan="mega"
+        )
+    )
+    newest_start, newest_end = _ranges(mega)[0]
+    assert newest_start is not None and newest_end is not None
+    assert datetime.fromisoformat(newest_end) - datetime.fromisoformat(newest_start) == timedelta(
+        days=91
+    )
+
+
+def test_iter_flights_is_lazy(history: History, respx_mock: respx.MockRouter) -> None:
+    route = _windows(respx_mock, _flights_page(_flight_row("f-1")), _flights_page())
+
+    iterator = history.iter_flights(icao24="4ca1fb", start=START, end=END, window_days=11)
+    assert route.call_count == 0
+
+    assert next(iter(iterator)).flight_id == "f-1"
+    assert route.call_count == 1
 
 
 # ── flight detail ────────────────────────────────────────────────────────────
@@ -520,6 +844,46 @@ async def test_async_flights_and_plan_override(
     assert request.url.params["icao24"] == "4ca1fb"
     assert result.count == 2
     assert result.flights[0].icao24 == "4CA1FB"
+
+
+async def test_async_iter_flights_walks_windows_newest_first(
+    async_history: AsyncHistory, respx_mock: respx.MockRouter
+) -> None:
+    route = _windows(
+        respx_mock,
+        _flights_page(_flight_row("f-newest")),
+        _flights_page(_flight_row("f-newest"), _flight_row("f-older")),  # boundary repeat
+        _flights_page(),
+    )
+
+    found = [
+        flight
+        async for flight in async_history.iter_flights(
+            icao24="4ca1fb", start=START, end=END, window_days=7
+        )
+    ]
+
+    assert [flight.flight_id for flight in found] == ["f-newest", "f-older"]
+    assert route.call_count == 3
+
+
+async def test_async_iter_flights_max_items_and_eager_validation(
+    async_history: AsyncHistory, respx_mock: respx.MockRouter
+) -> None:
+    _windows(respx_mock, _flights_page(_flight_row("f-1"), _flight_row("f-2")))
+
+    found = [
+        flight
+        async for flight in async_history.iter_flights(
+            callsign="BAW117", start=START, end=END, max_items=1
+        )
+    ]
+
+    assert [flight.flight_id for flight in found] == ["f-1"]
+    with pytest.raises(ValueError, match="at least one filter"):
+        async_history.iter_flights(start=START, end=END)
+    with pytest.raises(ValueError):
+        async_history.iter_flights(icao24="4ca1fb", window_days=0)
 
 
 async def test_async_track_and_positions_dispatch(

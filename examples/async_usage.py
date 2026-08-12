@@ -5,7 +5,7 @@ and share it across concurrent tasks rather than per request.
 
 Run it with a key in the environment::
 
-    export SKYLINK_API_KEY=sk_live_...
+    export RAPIDAPI_KEY=...msh...jsn...   # or SKYLINK_API_KEY with provider="direct"
     python examples/async_usage.py
 """
 
@@ -70,7 +70,8 @@ async def resilient_fanout(sky: AsyncSkyLink) -> None:
 
 async def main() -> None:
     try:
-        # api_key falls back to $SKYLINK_API_KEY; `async with` closes the pool.
+        # RapidAPI by default; api_key falls back to $RAPIDAPI_KEY. `async with`
+        # closes the pool.
         async with AsyncSkyLink() as sky:
             await board_snapshot(sky)
             await resilient_fanout(sky)

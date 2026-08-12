@@ -20,8 +20,9 @@ import respx
 from conftest import TEST_BASE_URL, load_fixture
 from skylink_api._client import AsyncSkyLink, SkyLink
 from skylink_api._exceptions import BadRequestError
-from skylink_api.models.adsb import AdsbAircraftList, AdsbHealth, AdsbStatistics
+from skylink_api.models.adsb import AdsbAircraft, AdsbAircraftList, AdsbHealth, AdsbStatistics
 from skylink_api.resources.adsb import (
+    MAX_ITER_PAGE_SIZE,
     Adsb,
     AsyncAdsb,
     _aircraft_spec,
@@ -244,6 +245,178 @@ def test_aircraft_request_options_are_forwarded(adsb: Adsb, respx_mock: respx.Mo
     assert request.url.params["debug"] == "true"
 
 
+# ── iter_aircraft (auto-pagination) ──────────────────────────────────────────
+
+
+def _page(*addresses: str, total: int | None = None) -> dict[str, Any]:
+    """A feed page holding one row per address."""
+
+    return {
+        "aircraft": [{"icao24": address, "callsign": f"CS{address[-3:]}"} for address in addresses],
+        "total_count": total if total is not None else len(addresses),
+    }
+
+
+def _pages(respx_mock: respx.MockRouter, *payloads: dict[str, Any]) -> respx.Route:
+    return respx_mock.get(url__startswith=f"{TEST_BASE_URL}/adsb/aircraft").mock(
+        side_effect=[httpx.Response(200, json=payload) for payload in payloads]
+    )
+
+
+def _limits_and_offsets(route: respx.Route) -> list[tuple[str | None, str | None]]:
+    return [
+        (call.request.url.params.get("limit"), call.request.url.params.get("offset"))
+        for call in route.calls
+    ]
+
+
+def test_iter_aircraft_walks_three_pages(adsb: Adsb, respx_mock: respx.MockRouter) -> None:
+    route = _pages(
+        respx_mock,
+        _page("aaa001", "aaa002", total=5),
+        _page("aaa003", "aaa004", total=5),
+        _page("aaa005", total=5),  # short page ends the walk
+    )
+
+    found = list(adsb.iter_aircraft(page_size=2))
+
+    assert [aircraft.icao24 for aircraft in found] == [
+        "aaa001",
+        "aaa002",
+        "aaa003",
+        "aaa004",
+        "aaa005",
+    ]
+    assert all(isinstance(aircraft, AdsbAircraft) for aircraft in found)
+    assert _limits_and_offsets(route) == [("2", "0"), ("2", "2"), ("2", "4")]
+
+
+def test_iter_aircraft_stops_on_a_full_final_page_followed_by_an_empty_one(
+    adsb: Adsb, respx_mock: respx.MockRouter
+) -> None:
+    """A result that is an exact multiple of ``page_size`` costs one extra request."""
+
+    route = _pages(respx_mock, _page("aaa001", "aaa002"), _page())
+
+    found = list(adsb.iter_aircraft(page_size=2))
+
+    assert len(found) == 2
+    assert route.call_count == 2
+
+
+def test_iter_aircraft_empty_first_page_yields_nothing(
+    adsb: Adsb, respx_mock: respx.MockRouter
+) -> None:
+    route = _pages(respx_mock, _page())
+
+    assert list(adsb.iter_aircraft(page_size=50)) == []
+    assert route.call_count == 1
+
+
+def test_iter_aircraft_max_items_stops_mid_page(adsb: Adsb, respx_mock: respx.MockRouter) -> None:
+    route = _pages(respx_mock, _page("aaa001", "aaa002", "aaa003"))
+
+    found = list(adsb.iter_aircraft(page_size=3, max_items=2))
+
+    assert [aircraft.icao24 for aircraft in found] == ["aaa001", "aaa002"]
+    assert route.call_count == 1
+
+
+def test_iter_aircraft_last_request_asks_only_for_what_is_left(
+    adsb: Adsb, respx_mock: respx.MockRouter
+) -> None:
+    """``max_items`` shrinks the final ``limit`` instead of paying for extra rows."""
+
+    route = _pages(respx_mock, _page("aaa001", "aaa002"), _page("aaa003"))
+
+    found = list(adsb.iter_aircraft(page_size=2, max_items=3))
+
+    assert len(found) == 3
+    assert _limits_and_offsets(route) == [("2", "0"), ("1", "2")]
+
+
+def test_iter_aircraft_stops_when_the_backend_ignores_offset(
+    adsb: Adsb, respx_mock: respx.MockRouter
+) -> None:
+    """Same ``icao24`` set twice ⇒ the walk is looping; stop instead of spinning."""
+
+    route = _pages(
+        respx_mock,
+        _page("aaa001", "aaa002", total=99),
+        _page("aaa001", "aaa002", total=99),
+        _page("aaa001", "aaa002", total=99),
+    )
+
+    found = list(adsb.iter_aircraft(page_size=2))
+
+    assert [aircraft.icao24 for aircraft in found] == ["aaa001", "aaa002"]
+    assert route.call_count == 2  # the repeat is detected, not yielded
+
+
+def test_iter_aircraft_forwards_every_filter(adsb: Adsb, respx_mock: respx.MockRouter) -> None:
+    route = _pages(respx_mock, _page("aaa001"))
+
+    list(adsb.iter_aircraft(page_size=10, bbox=BBOX, airline="British", min_alt=1000, photos=True))
+
+    params = route.calls.last.request.url.params
+    assert params["bbox"] == BBOX_WIRE
+    assert params["airline"] == "British"
+    assert params["min_alt"] == "1000"
+    assert params["photos"] == "true"
+    assert params["limit"] == "10"
+
+
+def test_iter_aircraft_is_lazy(adsb: Adsb, respx_mock: respx.MockRouter) -> None:
+    """Building the iterator must not fetch anything; ``break`` must stop fetching."""
+
+    route = _pages(respx_mock, _page("aaa001", "aaa002"), _page("aaa003", "aaa004"))
+
+    iterator = adsb.iter_aircraft(page_size=2)
+    assert route.call_count == 0
+
+    first = next(iter(iterator))
+
+    assert first.icao24 == "aaa001"
+    assert route.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"page_size": 0},
+        {"page_size": -1},
+        {"page_size": "100"},  # not a number
+        {"max_items": 0},
+        {"max_items": -5},
+    ],
+)
+def test_iter_aircraft_rejects_bad_paging_before_any_request(
+    adsb: Adsb, respx_mock: respx.MockRouter, kwargs: dict[str, Any]
+) -> None:
+    route = _pages(respx_mock, _page("aaa001"))
+
+    with pytest.raises(ValueError):
+        adsb.iter_aircraft(**kwargs)
+
+    assert route.call_count == 0
+
+
+def test_iter_aircraft_clamps_an_oversized_page_size(
+    adsb: Adsb, respx_mock: respx.MockRouter
+) -> None:
+    """Above the cap is clamped, not rejected — the rule shared with the TS SDK."""
+
+    route = _pages(respx_mock, _page("aaa001"))
+
+    list(adsb.iter_aircraft(page_size=MAX_ITER_PAGE_SIZE + 5000))
+
+    assert route.calls.last.request.url.params["limit"] == str(MAX_ITER_PAGE_SIZE)
+
+
+def test_max_iter_page_size_is_documented_and_generous() -> None:
+    assert MAX_ITER_PAGE_SIZE == 1000
+
+
 # ── statistics ───────────────────────────────────────────────────────────────
 
 STATS_PAYLOAD: dict[str, Any] = {
@@ -370,6 +543,30 @@ async def test_async_aircraft(async_client: AsyncSkyLink, respx_mock: respx.Mock
     assert params["photos"] == "false"
     assert isinstance(result, AdsbAircraftList)
     assert result.total_count == 2
+
+
+async def test_async_iter_aircraft(
+    async_client: AsyncSkyLink, respx_mock: respx.MockRouter
+) -> None:
+    route = _pages(respx_mock, _page("aaa001", "aaa002"), _page("aaa003"))
+
+    found = [aircraft async for aircraft in AsyncAdsb(async_client).iter_aircraft(page_size=2)]
+
+    assert [aircraft.icao24 for aircraft in found] == ["aaa001", "aaa002", "aaa003"]
+    assert _limits_and_offsets(route) == [("2", "0"), ("2", "2")]
+
+
+async def test_async_iter_aircraft_max_items_and_validation(
+    async_client: AsyncSkyLink, respx_mock: respx.MockRouter
+) -> None:
+    _pages(respx_mock, _page("aaa001", "aaa002"))
+    adsb = AsyncAdsb(async_client)
+
+    found = [aircraft async for aircraft in adsb.iter_aircraft(page_size=5, max_items=1)]
+
+    assert [aircraft.icao24 for aircraft in found] == ["aaa001"]
+    with pytest.raises(ValueError):
+        adsb.iter_aircraft(page_size=0)
 
 
 async def test_async_statistics_and_health(

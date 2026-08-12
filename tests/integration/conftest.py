@@ -13,37 +13,44 @@ The suite only runs against a real deployment, so it is doubly gated:
 
 Usage::
 
+    # production, RapidAPI channel — the client default, no provider needed
+    SKYLINK_TEST_API_KEY=...msh...jsn... \
+        ./.venv/Scripts/python.exe -m pytest tests/integration -v
+
     # staging container from the backend's docker-compose.test.yml
     SKYLINK_TEST_BASE_URL=http://localhost:8081/v3.1 \
         ./.venv/Scripts/python.exe -m pytest tests/integration -v
 
-    # production, direct channel, with a key
-    SKYLINK_TEST_BASE_URL=https://data.skylinkapi.com/v3.1 \
+    # production, direct channel, with a direct key
+    SKYLINK_TEST_PROVIDER=direct \
     SKYLINK_TEST_API_KEY=sk_live_... \
-        ./.venv/Scripts/python.exe -m pytest tests/integration -v
-
-    # production, RapidAPI channel (base URL comes from the provider)
-    SKYLINK_TEST_PROVIDER=rapidapi \
-    SKYLINK_TEST_API_KEY=...msh...jsn... \
         ./.venv/Scripts/python.exe -m pytest tests/integration -v
 
 ``SKYLINK_TEST_API_KEY`` is optional: with an explicit ``base_url`` the SDK does
 not require a key, which is what staging instances running ``DISABLE_AUTH=true``
 expect.
 
-``SKYLINK_TEST_PROVIDER`` selects the channel (``direct`` by default). Setting it
-to ``rapidapi`` sends ``X-RapidAPI-Key``/``X-RapidAPI-Host`` and, unless
-``SKYLINK_TEST_BASE_URL`` overrides it, targets the marketplace host — which is
-why either variable on its own is enough to arm the suite.
+``SKYLINK_TEST_PROVIDER`` selects the channel and follows the SDK default,
+``rapidapi`` — which sends ``X-RapidAPI-Key``/``X-RapidAPI-Host`` and, unless
+``SKYLINK_TEST_BASE_URL`` overrides it, targets the marketplace host. Set it to
+``direct`` for ``x-api-key`` against ``data.skylinkapi.com/v3.1``. Either a base
+URL or a key on its own is enough to arm the suite.
+
+:mod:`tests.integration.test_live_direct` is the exception: it proves the direct
+channel is addressed correctly using rejected keys only, so it needs no
+credentials — just a network, which :func:`require_network` gates on.
 """
 
 from __future__ import annotations
 
 import os
+import socket
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
+from functools import cache
 from pathlib import Path
 
+import httpx
 import pytest
 
 from skylink_api import (
@@ -69,18 +76,18 @@ BASE_URL = os.environ.get(BASE_URL_ENV, "").strip()
 #: Optional key. Empty → the client is built with ``base_url`` only.
 API_KEY = os.environ.get(API_KEY_ENV, "").strip()
 
-#: Channel to exercise: ``direct`` (default) or ``rapidapi``.
+#: Channel to exercise: ``rapidapi`` (the SDK default) or ``direct``.
 PROVIDER: Provider = (
-    "rapidapi" if os.environ.get(PROVIDER_ENV, "").strip() == "rapidapi" else "direct"
+    "direct" if os.environ.get(PROVIDER_ENV, "").strip() == "direct" else "rapidapi"
 )
 
-#: The suite is armed by a base URL (any channel) or by naming a provider with a key.
-ARMED = bool(BASE_URL) or (PROVIDER == "rapidapi" and bool(API_KEY))
+#: The suite is armed by a base URL (any channel) or by a key on the chosen channel.
+ARMED = bool(BASE_URL) or bool(API_KEY)
 
 SKIP_REASON = (
-    f"live API tests need {BASE_URL_ENV} "
-    f"(e.g. {BASE_URL_ENV}=http://localhost:8081/v3.1) "
-    f"or {PROVIDER_ENV}=rapidapi with {API_KEY_ENV}"
+    f"live API tests need {API_KEY_ENV} (RapidAPI key by default, or "
+    f"{PROVIDER_ENV}=direct with a direct key) or {BASE_URL_ENV} "
+    f"(e.g. {BASE_URL_ENV}=http://localhost:8081/v3.1)"
 )
 
 _INTEGRATION_DIR = Path(__file__).parent.resolve()
@@ -118,6 +125,48 @@ def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool 
     if _explicitly_selected(config):
         return None
     return True
+
+
+# ── network gate ─────────────────────────────────────────────────────────────
+#
+# A few live tests need no credentials at all — the direct gateway answers ``401``
+# with a machine readable code to *any* request, which is enough to prove that the
+# SDK addresses ``data.skylinkapi.com`` correctly (see ``test_live_direct.py``).
+# They still need a network, so they are gated on one: an offline CI box must skip
+# them, not fail.
+#
+# The probe is deliberately a bare TCP handshake to the host's TLS port. It answers
+# "is there a network path to this host at all" and nothing else, so what the test
+# itself asserts — the URL the SDK builds, the header it sends, the error body it
+# parses — is never absorbed by the gate. A handshake that succeeds while the HTTP
+# exchange misbehaves is a real failure.
+
+#: Seconds allowed for the TCP handshake of the reachability probe.
+NETWORK_PROBE_TIMEOUT = 5.0
+
+
+@cache
+def network_skip_reason(host: str, port: int = 443) -> str | None:
+    """``None`` when ``host:port`` accepts a TCP connection, else a skip reason.
+
+    Cached, so a run of the whole suite pays for one handshake (or one timeout)
+    rather than one per test.
+    """
+
+    try:
+        with socket.create_connection((host, port), timeout=NETWORK_PROBE_TIMEOUT):
+            return None
+    except OSError as exc:
+        return f"no network path to {host}:{port} ({type(exc).__name__}: {exc})"
+
+
+def require_network(url: str) -> None:
+    """Skip the calling test when ``url``'s host cannot be reached at all."""
+
+    parsed = httpx.URL(url)
+    reason = network_skip_reason(parsed.host, parsed.port or 443)
+    if reason is not None:
+        pytest.skip(reason)
 
 
 # ── clients ──────────────────────────────────────────────────────────────────

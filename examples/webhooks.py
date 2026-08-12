@@ -7,7 +7,7 @@ provably never reached the handler.
 
 Run it with a key in the environment::
 
-    export SKYLINK_API_KEY=sk_live_...
+    export RAPIDAPI_KEY=...msh...jsn...   # or SKYLINK_API_KEY with provider="direct"
     python examples/webhooks.py
 """
 
@@ -82,7 +82,7 @@ def delete(sky: SkyLink, webhook_id: str) -> None:
 
 def main() -> None:
     try:
-        with SkyLink() as sky:  # api_key falls back to $SKYLINK_API_KEY
+        with SkyLink() as sky:  # RapidAPI channel, api_key falls back to $RAPIDAPI_KEY
             show_event_types(sky)
             webhook_id = create(sky)
             show_all(sky)

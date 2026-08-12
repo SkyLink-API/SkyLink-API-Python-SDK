@@ -1,4 +1,8 @@
-"""Configuration resolution: providers, env fallback, base URL, headers."""
+"""Configuration resolution: providers, env fallback, base URL, headers.
+
+``provider`` defaults to ``"rapidapi"``, so a client built without one is a
+*RapidAPI* client here; the direct channel is always requested explicitly.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ from skylink_api._client import AsyncSkyLink, SkyLink
 from skylink_api._config import resolve_config
 from skylink_api._constants import (
     DEFAULT_MAX_RETRIES,
+    DEFAULT_PROVIDER,
     DEFAULT_TIMEOUT,
     DIRECT_BASE_URL,
     RAPIDAPI_BASE_URL,
@@ -31,21 +36,12 @@ def _ok(respx_mock: respx.MockRouter) -> respx.Route:
 # ── providers ────────────────────────────────────────────────────────────────
 
 
-def test_direct_provider_base_url_and_auth_header(respx_mock: respx.MockRouter) -> None:
+def test_default_provider_is_rapidapi(respx_mock: respx.MockRouter) -> None:
+    """``SkyLink()`` is a RapidAPI client — that is how most subscriptions arrive."""
+
     route = _ok(respx_mock)
-    with SkyLink(api_key="sk_direct", environ={}) as sky:
-        assert sky.base_url == DIRECT_BASE_URL
-        sky.request("GET", "/weather/metar/KJFK")
-
-    request = route.calls.last.request
-    assert str(request.url) == "https://data.skylinkapi.com/v3.1/weather/metar/KJFK"
-    assert request.headers["x-api-key"] == "sk_direct"
-    assert "X-RapidAPI-Key" not in request.headers
-
-
-def test_rapidapi_provider_base_url_and_headers(respx_mock: respx.MockRouter) -> None:
-    route = _ok(respx_mock)
-    with SkyLink(api_key="rapid_key", provider="rapidapi", environ={}) as sky:
+    with SkyLink(api_key="rapid_key", environ={}) as sky:
+        assert sky.provider == DEFAULT_PROVIDER == "rapidapi"
         assert sky.base_url == RAPIDAPI_BASE_URL
         sky.request("GET", "/weather/metar/KJFK")
 
@@ -55,6 +51,33 @@ def test_rapidapi_provider_base_url_and_headers(respx_mock: respx.MockRouter) ->
     assert request.headers["x-rapidapi-key"] == "rapid_key"
     assert request.headers["x-rapidapi-host"] == RAPIDAPI_HOST
     assert "x-api-key" not in request.headers
+
+
+def test_default_provider_reaches_namespaces(respx_mock: respx.MockRouter) -> None:
+    """A typed namespace call over the default channel: no version prefix anywhere."""
+
+    route = respx_mock.get(url__startswith=f"{RAPIDAPI_BASE_URL}/adsb/aircraft").mock(
+        return_value=httpx.Response(200, json={"aircraft": [], "total_count": 0})
+    )
+    with SkyLink(api_key="rapid_key", environ={}) as sky:
+        sky.adsb.aircraft(callsign="BAW117")
+
+    request = route.calls.last.request
+    assert request.url.path == "/adsb/aircraft"
+    assert request.headers["x-rapidapi-host"] == RAPIDAPI_HOST
+
+
+def test_direct_provider_base_url_and_auth_header(respx_mock: respx.MockRouter) -> None:
+    route = _ok(respx_mock)
+    with SkyLink(api_key="sk_direct", provider="direct", environ={}) as sky:
+        assert sky.base_url == DIRECT_BASE_URL
+        sky.request("GET", "/weather/metar/KJFK")
+
+    request = route.calls.last.request
+    assert str(request.url) == "https://data.skylinkapi.com/v3.1/weather/metar/KJFK"
+    assert request.headers["x-api-key"] == "sk_direct"
+    assert "X-RapidAPI-Key" not in request.headers
+    assert "X-RapidAPI-Host" not in request.headers
 
 
 def test_internal_backend_headers_are_never_sent(respx_mock: respx.MockRouter) -> None:
@@ -76,13 +99,13 @@ def test_unknown_provider_rejected() -> None:
 
 
 def test_api_key_from_env_direct() -> None:
-    config = resolve_config(environ={"SKYLINK_API_KEY": "from-env"})
+    config = resolve_config(provider="direct", environ={"SKYLINK_API_KEY": "from-env"})
     assert config.api_key == "from-env"
     assert config.auth_headers() == {"x-api-key": "from-env"}
 
 
 def test_api_key_from_env_rapidapi() -> None:
-    config = resolve_config(provider="rapidapi", environ={"RAPIDAPI_KEY": "rapid-env"})
+    config = resolve_config(environ={"RAPIDAPI_KEY": "rapid-env"})
     assert config.api_key == "rapid-env"
     assert config.auth_headers() == {
         "X-RapidAPI-Key": "rapid-env",
@@ -90,32 +113,65 @@ def test_api_key_from_env_rapidapi() -> None:
     }
 
 
-def test_env_var_is_provider_specific() -> None:
-    # A direct key must not leak into the RapidAPI channel.
+def test_rapidapi_falls_back_to_skylink_api_key() -> None:
+    """``SKYLINK_API_KEY`` is the neutral name — the default channel accepts it."""
+
+    config = resolve_config(environ={"SKYLINK_API_KEY": "shared-env"})
+    assert config.provider == "rapidapi"
+    assert config.api_key == "shared-env"
+    assert config.auth_headers() == {
+        "X-RapidAPI-Key": "shared-env",
+        "X-RapidAPI-Host": RAPIDAPI_HOST,
+    }
+
+
+def test_rapidapi_key_wins_over_the_fallback() -> None:
+    config = resolve_config(environ={"RAPIDAPI_KEY": "rapid-env", "SKYLINK_API_KEY": "shared-env"})
+    assert config.api_key == "rapid-env"
+
+
+def test_blank_rapidapi_key_falls_through_to_the_fallback() -> None:
+    config = resolve_config(environ={"RAPIDAPI_KEY": "   ", "SKYLINK_API_KEY": "shared-env"})
+    assert config.api_key == "shared-env"
+
+
+def test_direct_never_reads_the_rapidapi_key() -> None:
+    """Marketplace keys are not valid on data.skylinkapi.com — no leaking backwards."""
+
     with pytest.raises(AuthenticationError):
-        resolve_config(provider="rapidapi", environ={"SKYLINK_API_KEY": "direct-only"})
+        resolve_config(provider="direct", environ={"RAPIDAPI_KEY": "rapid-only"})
 
 
 def test_os_environ_is_used_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SKYLINK_API_KEY", "ambient")
+    monkeypatch.delenv("SKYLINK_API_KEY", raising=False)
+    monkeypatch.setenv("RAPIDAPI_KEY", "ambient")
     assert resolve_config().api_key == "ambient"
 
 
 def test_explicit_key_beats_env() -> None:
-    config = resolve_config(api_key="explicit", environ={"SKYLINK_API_KEY": "from-env"})
+    config = resolve_config(api_key="explicit", environ={"RAPIDAPI_KEY": "from-env"})
     assert config.api_key == "explicit"
 
 
 def test_blank_env_key_is_treated_as_missing() -> None:
     with pytest.raises(AuthenticationError):
-        resolve_config(environ={"SKYLINK_API_KEY": "   "})
+        resolve_config(environ={"RAPIDAPI_KEY": "   ", "SKYLINK_API_KEY": ""})
 
 
 def test_missing_key_raises_authentication_error() -> None:
     with pytest.raises(AuthenticationError) as excinfo:
         resolve_config(environ={})
-    assert "SKYLINK_API_KEY" in str(excinfo.value)
+    # The default channel names its own variable first and the fallback second.
+    assert "RAPIDAPI_KEY (or SKYLINK_API_KEY)" in str(excinfo.value)
     assert excinfo.value.status_code == 401
+
+
+def test_missing_key_message_for_direct_names_only_its_variable() -> None:
+    with pytest.raises(AuthenticationError) as excinfo:
+        resolve_config(provider="direct", environ={})
+    message = str(excinfo.value)
+    assert "SKYLINK_API_KEY" in message
+    assert "RAPIDAPI_KEY" not in message
 
 
 # ── base URL override ────────────────────────────────────────────────────────
@@ -132,11 +188,14 @@ def test_explicit_base_url_without_key_is_allowed(respx_mock: respx.MockRouter) 
     request = route.calls.last.request
     assert str(request.url) == f"{STAGING_URL}/weather/metar/KJFK"
     assert "x-api-key" not in request.headers
+    assert "x-rapidapi-key" not in request.headers
 
 
 def test_custom_base_url_does_not_duplicate_version(respx_mock: respx.MockRouter) -> None:
+    """The direct default already carries ``/v3.1`` — an explicit URL replaces it."""
+
     route = _ok(respx_mock)
-    with SkyLink(api_key="k", base_url=STAGING_URL, environ={}) as sky:
+    with SkyLink(api_key="k", provider="direct", base_url=STAGING_URL, environ={}) as sky:
         sky.request("GET", "/adsb/aircraft")
 
     url = str(route.calls.last.request.url)
@@ -153,8 +212,10 @@ def test_trailing_slash_is_stripped_from_base_url(respx_mock: respx.MockRouter) 
 
 
 def test_path_without_leading_slash_still_joins(respx_mock: respx.MockRouter) -> None:
+    """Checked on ``direct``: its base URL has a path, so a bad join would show."""
+
     route = _ok(respx_mock)
-    with SkyLink(api_key="k", environ={}) as sky:
+    with SkyLink(api_key="k", provider="direct", environ={}) as sky:
         sky.request("GET", "countries")
 
     assert str(route.calls.last.request.url) == f"{DIRECT_BASE_URL}/countries"
@@ -164,10 +225,18 @@ def test_trailing_slash_in_path_is_preserved(respx_mock: respx.MockRouter) -> No
     """``/adsb/`` genuinely needs its trailing slash."""
 
     route = _ok(respx_mock)
-    with SkyLink(api_key="k", environ={}) as sky:
+    with SkyLink(api_key="k", provider="direct", environ={}) as sky:
         sky.request("GET", "/adsb/")
 
     assert str(route.calls.last.request.url) == f"{DIRECT_BASE_URL}/adsb/"
+
+
+def test_trailing_slash_in_path_is_preserved_on_rapidapi(respx_mock: respx.MockRouter) -> None:
+    route = _ok(respx_mock)
+    with SkyLink(api_key="k", environ={}) as sky:
+        sky.request("GET", "/adsb/")
+
+    assert str(route.calls.last.request.url) == f"{RAPIDAPI_BASE_URL}/adsb/"
 
 
 def test_empty_base_url_rejected() -> None:
@@ -249,11 +318,15 @@ def test_history_plan_default_and_override() -> None:
 
 def test_client_exposes_config() -> None:
     with SkyLink(api_key="k", history_plan="mega", max_retries=1, environ={}) as sky:
-        assert sky.provider == "direct"
+        assert sky.provider == "rapidapi"
         assert sky.history_plan == "mega"
         assert sky.max_retries == 1
         assert sky.api_key == "k"
         assert sky.last_rate_limit is None
+
+    with SkyLink(api_key="k", provider="direct", environ={}) as direct:
+        assert direct.provider == "direct"
+        assert direct.base_url == DIRECT_BASE_URL
 
 
 # ── request() escape hatch and lifecycle ─────────────────────────────────────
@@ -301,8 +374,19 @@ async def test_async_client_basics(respx_mock: respx.MockRouter) -> None:
 
     assert payload == {"ok": True}
     request = route.calls.last.request
-    assert request.headers["x-api-key"] == "async-key"
+    # Default channel: the async client authenticates exactly like the sync one.
+    assert request.headers["x-rapidapi-key"] == "async-key"
+    assert request.headers["x-rapidapi-host"] == RAPIDAPI_HOST
     assert request.headers["user-agent"] == USER_AGENT
+
+
+async def test_async_client_direct_provider(respx_mock: respx.MockRouter) -> None:
+    route = _ok(respx_mock)
+    async with AsyncSkyLink(api_key="async-key", provider="direct", environ={}) as sky:
+        assert sky.base_url == DIRECT_BASE_URL
+        await sky.request("GET", "/health")
+
+    assert route.calls.last.request.headers["x-api-key"] == "async-key"
 
 
 async def test_async_client_closes() -> None:

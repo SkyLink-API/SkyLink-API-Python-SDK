@@ -2,7 +2,7 @@
 
 Run it with a key in the environment::
 
-    export SKYLINK_API_KEY=sk_live_...
+    export RAPIDAPI_KEY=...msh...jsn...   # or SKYLINK_API_KEY with provider="direct"
     python examples/adsb_tracking.py
 """
 
@@ -56,9 +56,10 @@ def show_traffic(sky: SkyLink) -> None:
 def show_quota(sky: SkyLink) -> None:
     """Quota snapshot from the last successful response.
 
-    ``last_rate_limit`` is populated from the ``X-RateLimit-Requests-*`` headers
-    the marketplace gateway injects, so it stays ``None`` against a staging
-    instance that does not go through the gateway.
+    ``last_rate_limit`` is populated from whichever quota headers the channel's
+    gateway injects — ``X-RateLimit-Requests-*`` on RapidAPI, ``X-RateLimit-*``
+    on direct — so it stays ``None`` only against a staging instance that goes
+    through neither.
     """
 
     quota = sky.last_rate_limit
@@ -90,7 +91,7 @@ def show_feed_health(sky: SkyLink) -> None:
 
 def main() -> None:
     try:
-        with SkyLink() as sky:  # api_key falls back to $SKYLINK_API_KEY
+        with SkyLink() as sky:  # RapidAPI channel, api_key falls back to $RAPIDAPI_KEY
             show_traffic(sky)
             show_quota(sky)
             show_feed_health(sky)

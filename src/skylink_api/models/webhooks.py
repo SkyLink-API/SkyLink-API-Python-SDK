@@ -14,6 +14,7 @@ and ``DELETE`` answers ``204`` with no body at all, which the resource turns int
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from typing import Any
 
 from pydantic import Field
@@ -22,11 +23,65 @@ from ._base import SkyLinkModel
 
 __all__ = [
     "Webhook",
+    "WebhookEvent",
     "WebhookEventTypesResponse",
     "WebhookListResponse",
     "WebhookSubscription",
     "WebhookToggleResponse",
 ]
+
+
+class WebhookEvent(str, Enum):
+    """The six events a subscription can listen for, as an enum.
+
+    A ``str`` enum, so a member **is** the wire string: it serialises to
+    ``"status_changed"``, compares equal to it, and can be passed anywhere the
+    SDK accepts an event name::
+
+        sky.webhooks.create(
+            url="https://hooks.example.com/skylink",
+            event_types=[WebhookEvent.FLIGHT_DELAYED, "gate_changed"],
+            filters={"flight_number": "BA117"},
+        )
+
+    The literal type
+    :data:`~skylink_api.resources.webhooks.WebhookEventType` still exists and is
+    still accepted — this is the discoverable, typo-proof spelling of the same
+    values. Responses keep their events as plain ``str`` (see
+    :attr:`Webhook.event_types`), because an event the backend adds later must
+    not break parsing.
+
+    Values come from ``VALID_EVENTS`` in the backend's
+    ``services/v31/webhook_service.py``.
+    """
+
+    STATUS_CHANGED = "status_changed"
+    """Catch-all: any tracked field of the flight status changed."""
+
+    FLIGHT_DELAYED = "flight_delayed"
+    """The status indicates a delay, or an actual time moved back."""
+
+    FLIGHT_CANCELLED = "flight_cancelled"
+    """The flight was cancelled."""
+
+    FLIGHT_BOARDING = "flight_boarding"
+    """Boarding is in progress."""
+
+    FLIGHT_LANDED = "flight_landed"
+    """The flight has landed / arrived."""
+
+    GATE_CHANGED = "gate_changed"
+    """A departure or arrival gate changed."""
+
+    def __str__(self) -> str:
+        """The wire value — ``str(WebhookEvent.GATE_CHANGED) == "gate_changed"``.
+
+        Without this, Python < 3.11 formats a ``str`` enum as
+        ``"WebhookEvent.GATE_CHANGED"``, which is never what you want in a URL,
+        a log line or an f-string.
+        """
+
+        return str(self.value)
 
 
 class Webhook(SkyLinkModel):

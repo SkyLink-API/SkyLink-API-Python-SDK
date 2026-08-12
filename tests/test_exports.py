@@ -20,7 +20,7 @@ import pytest
 import respx
 
 import skylink_api
-from conftest import TEST_BASE_URL
+from conftest import TEST_BASE_URL, TEST_PROVIDER
 from skylink_api import AsyncSkyLink, SkyLink
 from skylink_api.models.distance import DistanceResponse
 from skylink_api.models.flight_status import FlightStatusResponse
@@ -33,9 +33,11 @@ from skylink_api.resources import (
     AsyncAircraft,
     AsyncAirlines,
     AsyncAirports,
+    AsyncBatch,
     AsyncBriefing,
     AsyncCarbon,
     AsyncCharts,
+    AsyncCompose,
     AsyncDelays,
     AsyncDistance,
     AsyncFlightStatus,
@@ -44,14 +46,17 @@ from skylink_api.resources import (
     AsyncMl,
     AsyncNavaids,
     AsyncNotams,
+    AsyncPoll,
     AsyncRoutes,
     AsyncSchedules,
     AsyncTickets,
     AsyncWeather,
     AsyncWebhooks,
+    Batch,
     Briefing,
     Carbon,
     Charts,
+    Compose,
     Delays,
     Distance,
     FlightStatus,
@@ -60,6 +65,7 @@ from skylink_api.resources import (
     Ml,
     Navaids,
     Notams,
+    Poll,
     Routes,
     Schedules,
     Tickets,
@@ -67,9 +73,13 @@ from skylink_api.resources import (
     Webhooks,
 )
 
-#: ``attribute -> (sync class, async class)`` for all 18 namespaces the client
-#: exposes. ``flight_status`` and ``distance`` are deliberately absent — they are
-#: methods, not namespaces.
+#: ``attribute -> (sync class, async class)`` for all 21 namespaces the client
+#: exposes — the eighteen endpoint namespaces plus the three DX ones
+#: (``batch``, ``poll``, ``compose``). ``flight_status`` and ``distance`` are
+#: deliberately absent: they are methods, not namespaces.
+#:
+#: Adding a namespace without adding it here is exactly the mistake this file
+#: exists to catch, so the count is asserted below.
 NAMESPACES: dict[str, tuple[type, type]] = {
     "weather": (Weather, AsyncWeather),
     "airports": (Airports, AsyncAirports),
@@ -89,6 +99,9 @@ NAMESPACES: dict[str, tuple[type, type]] = {
     "tickets": (Tickets, AsyncTickets),
     "webhooks": (Webhooks, AsyncWebhooks),
     "history": (History, AsyncHistory),
+    "batch": (Batch, AsyncBatch),
+    "poll": (Poll, AsyncPoll),
+    "compose": (Compose, AsyncCompose),
 }
 
 FLIGHT_STATUS_PAYLOAD: dict[str, Any] = {
@@ -111,12 +124,12 @@ DISTANCE_PAYLOAD: dict[str, Any] = {
 
 @pytest.fixture
 def sync_client() -> SkyLink:
-    return SkyLink(api_key="test", environ={})
+    return SkyLink(api_key="test", provider=TEST_PROVIDER, environ={})
 
 
 @pytest.fixture
 def async_only_client() -> AsyncSkyLink:
-    return AsyncSkyLink(api_key="test", environ={})
+    return AsyncSkyLink(api_key="test", provider=TEST_PROVIDER, environ={})
 
 
 # ── namespace wiring ─────────────────────────────────────────────────────────
@@ -146,8 +159,21 @@ def test_async_namespaces_are_never_the_sync_class(
     assert not isinstance(getattr(async_only_client, name), sync_cls)
 
 
-def test_all_eighteen_namespaces_are_covered() -> None:
-    assert len(NAMESPACES) == 18
+def test_every_namespace_of_the_resources_package_is_covered() -> None:
+    """Derived from ``resources.__all__``, so a new namespace cannot be forgotten."""
+
+    from skylink_api import resources
+
+    exported = {
+        name
+        for name in resources.__all__
+        if not name.startswith("Async") and isinstance(getattr(resources, name), type)
+    }
+    # ``FlightStatus``/``Distance`` are methods on the client, not namespaces.
+    assert exported - {"FlightStatus", "Distance"} == {
+        sync_cls.__name__ for sync_cls, _ in NAMESPACES.values()
+    } - {"FlightStatus", "Distance"}
+    assert len(NAMESPACES) == 21
 
 
 @pytest.mark.parametrize("name", sorted(NAMESPACES))

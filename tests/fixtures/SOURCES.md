@@ -39,6 +39,9 @@ Line numbers refer to the repository state of 2026-08-12.
 | `errors_401.json` | verbatim from `main.py:190-201` (`_json_401`), research/01 §5 form A |
 | `errors_404.json` | hand-built from research/01 §5 form B — `HTTPException` detail string |
 | `errors_422_validation.json` | hand-built from research/01 §5 form C — FastAPI request-validation payload |
+| `weather_metar_parsed.json` | hand-built for task G1 (helpers) — `weather_metar.json` plus the `parsed` block built by `routers/weather.py:148-182` (`_serialize_metar`); note `altimeter: 30.2` carries **no unit** and `relative_humidity: 0.67` is a **fraction** (research/04) |
+| `weather_taf_parsed.json` | hand-built for task G1 (helpers) — `parsed` block from `routers/weather.py:184-223` (`_serialize_taf`/`_serialize_taf_period`); periods carry **no `temperature`/`altimeter`** and the first one has the live `P6SM` form `{"value": null, "repr": "P6"}` (research/04) |
+| `airports_ip_error.json` | verbatim failure branch of `services/v3/airport_search_service.py:214-222` — geolocation failure delivered **inside a 200** (`error` set, `location:null`, `airports:[]`) |
 
 ## Notes for SDK tests
 
