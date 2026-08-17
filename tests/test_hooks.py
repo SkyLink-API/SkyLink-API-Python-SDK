@@ -378,3 +378,27 @@ async def test_async_hooks_fire(respx_mock: respx.MockRouter, async_sleeper: Any
 
     assert [info.remaining for info in seen] == [900, 20]
     assert [info.remaining for info in alerts] == [20]
+
+
+async def test_async_callbacks_are_rejected_at_registration(async_sleeper: Any) -> None:
+    """The dispatcher never awaits — an ``async def`` hook would be created,
+    dropped unawaited, and its body would never run. Fail loudly instead."""
+
+    async def hook(info: RateLimitInfo) -> None:  # pragma: no cover - must never run
+        raise AssertionError("never awaited")
+
+    async with AsyncSkyLink(
+        api_key=TEST_API_KEY, provider=TEST_PROVIDER, sleep=async_sleeper, environ={}
+    ) as sky:
+        with pytest.raises(TypeError, match="synchronous"):
+            sky.on_rate_limit(hook)
+        with pytest.raises(TypeError, match="synchronous"):
+            sky.on_quota_low(hook)
+
+
+def test_sync_client_also_rejects_async_callbacks(sleeper: SleepRecorder) -> None:
+    async def hook(info: RateLimitInfo) -> None:  # pragma: no cover - must never run
+        raise AssertionError("never awaited")
+
+    with _client(sleeper) as sky, pytest.raises(TypeError, match="synchronous"):
+        sky.on_rate_limit(hook)

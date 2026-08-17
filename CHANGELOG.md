@@ -6,8 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-17
+
+First public release. Covers the SkyLink API v3.1 surface.
+
 ### Fixed
 
+Defects found and fixed during the pre-release audit, before anything shipped.
+
+- **`with_options(timeout=...)` was silently ignored.** The clone shares its parent's
+  `httpx` client, whose timeout was baked in when the *original* was built, and ordinary
+  requests never carried an explicit per-request timeout — so
+  `sky.with_options(timeout=120.0)` (the docstring's own example) still timed out at the
+  parent's 30 s. The resolved config timeout is now sent with every request. A
+  caller-supplied `http_client` keeps its own timeout configuration unless an explicit
+  `timeout=` is also given, which now wins instead of being dropped.
+- **An `async def` quota-hook callback never ran.** The hook dispatcher calls callbacks
+  synchronously, so a coroutine callback was created, dropped unawaited, and its body never
+  executed — no alert, no error, only a GC-time `RuntimeWarning` nobody sees. Registering a
+  coroutine function via `on_rate_limit()` / `on_quota_low()` now raises `TypeError` at
+  registration; schedule async work from a synchronous callback instead (e.g.
+  `asyncio.get_running_loop().create_task(...)`).
 - **`briefing.flight()` and `briefing.pdf()` timed out on every call with the default
   client.** A briefing is composed by a language model over both airports' weather and
   NOTAMs and takes far longer than the 30 s `DEFAULT_TIMEOUT`: measured live on
@@ -29,6 +48,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       request_options={"timeout": 60.0, "max_retries": 0},
   )
   ```
+
+- `batch.metars()` and `batch.tafs()` take `parsed=` (both `Batch` and `AsyncBatch`),
+  overloaded so `parsed=True` narrows the result to
+  `dict[str, MetarWithParsed | SkyLinkError]` / `dict[str, TafWithParsed | SkyLinkError]`.
+  Without it the batch could only return undecoded reports, and every function in
+  `helpers.weather` — `flight_category()`, `ceiling_ft()`, the unit parsers — silently
+  answered `None` on them, because they read decoded fields and never re-parse the raw
+  text. A weather board coloured by flight category is the main reason to batch METARs,
+  so the omission made the namespace unusable for its headline case. `compose.airport_brief`
+  and `compose.route_brief` already requested `parsed=True` for exactly this reason; `batch`
+  was the outlier. The default stays `False`, so no existing call changes behaviour.
 
 ### Changed
 
@@ -54,23 +84,6 @@ server side was corrected; what was wrong was the SDK telling users they were br
 - The `weather.airsigmet` live test lost its `xfail` marker — the endpoint answered a bare
   `500` for every bbox and now serves normally, so a 500 is a failure again. A second test
   covers the `type=` filter and the `filter_type` echo, which the 500 hid entirely.
-
-### Added
-
-- `batch.metars()` and `batch.tafs()` take `parsed=` (both `Batch` and `AsyncBatch`),
-  overloaded so `parsed=True` narrows the result to
-  `dict[str, MetarWithParsed | SkyLinkError]` / `dict[str, TafWithParsed | SkyLinkError]`.
-  Without it the batch could only return undecoded reports, and every function in
-  `helpers.weather` — `flight_category()`, `ceiling_ft()`, the unit parsers — silently
-  answered `None` on them, because they read decoded fields and never re-parse the raw
-  text. A weather board coloured by flight category is the main reason to batch METARs,
-  so the omission made the namespace unusable for its headline case. `compose.airport_brief`
-  and `compose.route_brief` already requested `parsed=True` for exactly this reason; `batch`
-  was the outlier. The default stays `False`, so no existing call changes behaviour.
-
-## [0.1.0] - Unreleased
-
-First public release. Covers the SkyLink API v3.1 surface.
 
 ### Added
 
@@ -198,10 +211,10 @@ First public release. Covers the SkyLink API v3.1 surface.
   extra, `skylink-api[pandas]`, used only by `skylink_api.pandas_ext`.
 - CI on GitHub Actions: ruff, `mypy --strict`, and pytest across Python 3.10-3.13 on Linux
   plus a Windows job. Tag-triggered publishing to PyPI via trusted publishing.
-- 1 349 unit tests, network free (`respx` mocks, injected backoff sleeps and pollers), plus an
+- 1 383 unit tests, network free (`respx` mocks, injected backoff sleeps and pollers), plus an
   environment-gated integration suite (`SKYLINK_TEST_API_KEY` / `SKYLINK_TEST_BASE_URL`,
   RapidAPI channel by default). The pandas tests skip themselves when the extra is absent.
 - Eleven runnable scripts in `examples/` and a full method index in the README.
 
-[Unreleased]: https://github.com/skylinkapi/Python-SDK-/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/skylinkapi/Python-SDK-/releases/tag/v0.1.0
+[Unreleased]: https://github.com/SkyLink-API/SkyLink-API-Python-SDK/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/SkyLink-API/SkyLink-API-Python-SDK/releases/tag/v0.1.0

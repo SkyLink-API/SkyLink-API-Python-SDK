@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import random
 import threading
 import time
@@ -97,6 +98,14 @@ class BaseClient:
         self._cache = cache
         self._hooks = _Hooks()
         self._hook_lock = threading.Lock()
+        #: Whether ``config.timeout`` is sent with every request. True for
+        #: SDK-built transports (the pool was constructed from the same value, so
+        #: it is a no-op there) and for ``with_options(timeout=...)`` clones —
+        #: the clone shares its parent's pool, whose baked-in timeout would
+        #: otherwise silently win. False only for a caller-supplied
+        #: ``http_client`` with no explicit ``timeout``, where the caller's own
+        #: client configuration stays authoritative.
+        self._apply_config_timeout = True
         #: Quota snapshot from the most recent response that carried quota
         #: headers — ``X-RateLimit-Requests-*`` on RapidAPI, ``X-RateLimit-*``
         #: on the direct channel.
@@ -194,13 +203,18 @@ class BaseClient:
         if spec.json_body is not None:
             kwargs["json"] = spec.json_body
         # Precedence: the caller's per-call timeout, then the endpoint's own
-        # default (``/briefing/*`` only), then the client-wide one httpx already
-        # holds. An explicit ``request_options={"timeout": ...}`` always wins,
-        # including when it is ``None`` (= no timeout).
+        # default (``/briefing/*`` only), then the client-wide config value. An
+        # explicit ``request_options={"timeout": ...}`` always wins, including
+        # when it is ``None`` (= no timeout). The config fallback must be sent
+        # explicitly: ``with_options`` clones share their parent's httpx client,
+        # so relying on the pool's baked-in default would silently ignore the
+        # clone's timeout.
         if options is not None and "timeout" in options:
             kwargs["timeout"] = options["timeout"]
         elif not isinstance(spec.timeout, NotGiven):
             kwargs["timeout"] = spec.timeout
+        elif self._apply_config_timeout:
+            kwargs["timeout"] = self._config.timeout
         return kwargs
 
     # ── retry policy ─────────────────────────────────────────────────────────
@@ -239,6 +253,24 @@ class BaseClient:
 
     # ── quota hooks ──────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _reject_async_callback(callback: RateLimitCallback) -> None:
+        """Hooks are invoked synchronously — a coroutine callback would be
+        created, dropped unawaited, and its body would never run. Fail loudly at
+        registration instead of silently at dispatch."""
+
+        if not callable(callback):
+            raise TypeError(f"callback must be callable, got {type(callback).__name__}")
+        if inspect.iscoroutinefunction(callback) or inspect.iscoroutinefunction(
+            type(callback).__call__  # callable instances: an async __call__ method
+        ):
+            raise TypeError(
+                "Quota hook callbacks must be synchronous. An `async def` callback "
+                "is never awaited, so its body would never run. From a synchronous "
+                "callback you can schedule async work with "
+                "asyncio.get_running_loop().create_task(...)."
+            )
+
     def on_rate_limit(self, callback: RateLimitCallback) -> Unsubscribe:
         """Call ``callback(info)`` after every response that carried quota headers.
 
@@ -259,10 +291,15 @@ class BaseClient:
         and re-emitted as a :class:`RuntimeWarning`, so it shows up in test runs
         and in ``-W error`` setups without breaking production traffic.
 
+        The callback must be a plain synchronous callable — also on
+        :class:`AsyncSkyLink`. Passing an ``async def`` raises :class:`TypeError`
+        at registration, because the hook dispatcher never awaits.
+
         Returns:
             A function that removes the callback; calling it twice is harmless.
         """
 
+        self._reject_async_callback(callback)
         with self._hook_lock:
             self._hooks.rate_limit.append(callback)
 
@@ -291,6 +328,8 @@ class BaseClient:
 
         Args:
             callback: Receives the :class:`RateLimitInfo` of the crossing response.
+                Must be synchronous — an ``async def`` raises :class:`TypeError`
+                at registration, because the hook dispatcher never awaits.
             threshold: Fraction of the quota left, ``0 < threshold <= 1``
                 (default ``0.1`` — the last 10%).
 
@@ -298,6 +337,7 @@ class BaseClient:
             A function that removes the callback.
         """
 
+        self._reject_async_callback(callback)
         if not 0 < threshold <= 1:
             raise ValueError(f"threshold must be in (0, 1], got {threshold}")
 
@@ -450,6 +490,10 @@ class SyncAPIClient(BaseClient):
         super().__init__(config, cache=cache)
         self._sleep = sleep
         self._owns_transport = owns_transport
+        # A caller-supplied client keeps its own timeout configuration unless an
+        # explicit ``timeout`` was also given (the public constructors and
+        # ``with_options`` flip this back on in that case).
+        self._apply_config_timeout = http_client is None
         self._http_client = http_client or httpx.Client(
             timeout=config.timeout,
             follow_redirects=True,
@@ -551,6 +595,9 @@ class AsyncAPIClient(BaseClient):
         super().__init__(config, cache=cache)
         self._sleep = sleep
         self._owns_transport = owns_transport
+        # Same rule as the sync transport: a caller-supplied client keeps its
+        # own timeout configuration unless ``timeout`` was given explicitly.
+        self._apply_config_timeout = http_client is None
         self._http_client = http_client or httpx.AsyncClient(
             timeout=config.timeout,
             follow_redirects=True,

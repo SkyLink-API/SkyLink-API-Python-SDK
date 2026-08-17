@@ -124,6 +124,40 @@ def test_with_options_overrides_and_leaves_the_original_alone(sleeper: SleepReco
         assert clone.provider == sky.provider
 
 
+def test_with_options_timeout_reaches_the_wire(
+    respx_mock: respx.MockRouter, sleeper: SleepRecorder
+) -> None:
+    """The clone shares the parent's pool, whose baked-in timeout would otherwise
+    silently win — the clone's timeout must be sent with every request."""
+
+    route = respx_mock.get(f"{TEST_BASE_URL}/weather/metar/KJFK").mock(
+        return_value=httpx.Response(200, json=METAR)
+    )
+    with _client(sleeper) as sky:
+        sky.with_options(timeout=120.0).weather.metar("KJFK")
+
+    assert route.calls.last.request.extensions["timeout"] == httpx.Timeout(120.0).as_dict()
+
+
+def test_a_callers_http_client_keeps_its_own_timeout(
+    respx_mock: respx.MockRouter, sleeper: SleepRecorder
+) -> None:
+    """Bring-your-own ``http_client`` stays authoritative for the timeout unless
+    an explicit ``timeout`` is also given, which must then win."""
+
+    route = respx_mock.get(f"{TEST_BASE_URL}/weather/metar/KJFK").mock(
+        return_value=httpx.Response(200, json=METAR)
+    )
+
+    with _client(sleeper, http_client=httpx.Client(timeout=7.0)) as sky:
+        sky.weather.metar("KJFK")
+    assert route.calls.last.request.extensions["timeout"] == httpx.Timeout(7.0).as_dict()
+
+    with _client(sleeper, http_client=httpx.Client(timeout=7.0), timeout=3.0) as sky:
+        sky.weather.metar("KJFK")
+    assert route.calls.last.request.extensions["timeout"] == httpx.Timeout(3.0).as_dict()
+
+
 def test_with_options_reuses_the_transport(sleeper: SleepRecorder) -> None:
     """No second connection pool — that is the whole point of the clone."""
 
