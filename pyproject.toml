@@ -58,9 +58,9 @@ dev = [
 [project.urls]
 Homepage = "https://skylinkapi.com"
 Documentation = "https://skylinkapi.com/docs"
-Repository = "https://github.com/skylinkapi/Python-SDK-"
-Changelog = "https://github.com/skylinkapi/Python-SDK-/blob/main/CHANGELOG.md"
-Issues = "https://github.com/skylinkapi/Python-SDK-/issues"
+Repository = "https://github.com/SkyLink-API/SkyLink-API-Python-SDK"
+Changelog = "https://github.com/SkyLink-API/SkyLink-API-Python-SDK/blob/main/CHANGELOG.md"
+Issues = "https://github.com/SkyLink-API/SkyLink-API-Python-SDK/issues"
 
 [tool.hatch.version]
 path = "src/skylink_api/_version.py"

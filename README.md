@@ -1,6 +1,6 @@
 # SkyLink API — Python SDK
 
-[![CI](https://github.com/skylinkapi/Python-SDK-/actions/workflows/ci.yml/badge.svg)](https://github.com/skylinkapi/Python-SDK-/actions/workflows/ci.yml)
+[![CI](https://github.com/SkyLink-API/SkyLink-API-Python-SDK/actions/workflows/ci.yml/badge.svg)](https://github.com/SkyLink-API/SkyLink-API-Python-SDK/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/skylink-api.svg)](https://pypi.org/project/skylink-api/)
 [![Python](https://img.shields.io/pypi/pyversions/skylink-api.svg)](https://pypi.org/project/skylink-api/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
