@@ -94,6 +94,15 @@ class RequestSpec:
     #: :func:`skylink_api.helpers.cache.operation_name`, which is right for every
     #: endpoint the SDK models. Set it when the path cannot speak for itself.
     operation: str | None = None
+    #: Endpoint specific timeout **default**, for the handful of routes the
+    #: client-wide default is wrong for. It loses to an explicit
+    #: ``request_options={"timeout": ...}``, so a caller can always override it;
+    #: it only replaces :data:`~skylink_api._constants.DEFAULT_TIMEOUT` when the
+    #: caller said nothing. ``NOT_GIVEN`` (the default) means "use the client's".
+    #:
+    #: Only ``/briefing/*`` sets it — see
+    #: :data:`~skylink_api._constants.BRIEFING_TIMEOUT`.
+    timeout: NotGivenOr[float | httpx.Timeout | None] = NOT_GIVEN
 
 
 class RequestOptions(TypedDict, total=False):

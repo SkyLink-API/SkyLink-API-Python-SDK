@@ -6,6 +6,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`briefing.flight()` and `briefing.pdf()` timed out on every call with the default
+  client.** A briefing is composed by a language model over both airports' weather and
+  NOTAMs and takes far longer than the 30 s `DEFAULT_TIMEOUT`: measured live on
+  2026-08-15, `format="json"` took 30–128 s, `markdown` 30–50 s, `plain_text` up to 85 s
+  and the PDF ~52 s. Every one of those aborted, and because a timeout is retried the
+  caller waited ~120 s to be told a healthy endpoint had failed. Both routes now carry a
+  new `BRIEFING_TIMEOUT` (180 s read) on the request spec itself.
+
+  This is the first use of the new `RequestSpec.timeout` field, an endpoint-level
+  *default*: an explicit `request_options={"timeout": ...}` still wins, and every other
+  endpoint keeps the client's timeout untouched. Retries are deliberately left on — a real
+  503 should still be retried — so cap both yourself where a slow page is worse than no
+  briefing:
+
+  ```python
+  sky.briefing.flight(
+      origin="KJFK",
+      destination="KLAX",
+      request_options={"timeout": 60.0, "max_retries": 0},
+  )
+  ```
+
+### Changed
+
+Documentation catching up with backend fixes shipped in the 2026-08 API release. No
+behaviour changes — every one of these endpoints already worked through the SDK once the
+server side was corrected; what was wrong was the SDK telling users they were broken.
+
+- `CONTINENTS` / `geo.countries(continent="NA")` no longer carry the "accepted but resolves
+  to nothing" warning. The backend used to read its reference CSV with pandas, which parses
+  the literal `NA` as *not-a-number*, so North America was unqueryable. Verified live on
+  2026-08-15: 41 countries and 440 regions.
+- `compose.north_america_countries()` is documented as a convenience rather than a
+  workaround, and its **TODO: delete** note is gone. The method is kept — it is public API,
+  and its predicate still accepts the historical `null`/`""` spellings alongside `"NA"`, so
+  it answers correctly against an older deployment. `geo.countries(continent="NA")` is now
+  the cheaper route and is documented as such.
+- `TicketOffer.original_price` / `.original_currency` are no longer documented as absent.
+  The ticket service emits them (`JFK→LAX`: `price_usd=168.52`, `original_price=137.0`,
+  `original_currency="CHF"`), which finally makes the `price_usd`-is-not-always-USD caveat
+  actionable.
+- `TicketSearchResponse.count` no longer claims a 15-offer cap: `JFK→LAX` returned 111
+  offers and `LHR→JFK` 120.
+- The `weather.airsigmet` live test lost its `xfail` marker — the endpoint answered a bare
+  `500` for every bbox and now serves normally, so a 500 is a failure again. A second test
+  covers the `type=` filter and the `filter_type` echo, which the 500 hid entirely.
+
+### Added
+
+- `batch.metars()` and `batch.tafs()` take `parsed=` (both `Batch` and `AsyncBatch`),
+  overloaded so `parsed=True` narrows the result to
+  `dict[str, MetarWithParsed | SkyLinkError]` / `dict[str, TafWithParsed | SkyLinkError]`.
+  Without it the batch could only return undecoded reports, and every function in
+  `helpers.weather` — `flight_category()`, `ceiling_ft()`, the unit parsers — silently
+  answered `None` on them, because they read decoded fields and never re-parse the raw
+  text. A weather board coloured by flight category is the main reason to batch METARs,
+  so the omission made the namespace unusable for its headline case. `compose.airport_brief`
+  and `compose.route_brief` already requested `parsed=True` for exactly this reason; `batch`
+  was the outlier. The default stays `False`, so no existing call changes behaviour.
+
 ## [0.1.0] - Unreleased
 
 First public release. Covers the SkyLink API v3.1 surface.

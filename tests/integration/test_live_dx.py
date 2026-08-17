@@ -377,25 +377,32 @@ def test_compose_enrich_adsb_joins_the_registry_within_its_budget(sky: SkyLink) 
 # ── 6. compose.north_america_countries ───────────────────────────────────────
 
 
-def test_compose_north_america_workaround_returns_the_missing_continent(sky: SkyLink) -> None:
-    """The ``continent="NA"`` filter returns nothing; this returns the 41 countries.
+def test_compose_north_america_agrees_with_the_server_side_filter(sky: SkyLink) -> None:
+    """Both routes to North America now return the same countries.
 
-    pandas reads the literal ``NA`` in the reference CSV as *not-a-number*, so
-    every North American country arrives with ``continent: null`` and the
-    server-side filter matches zero rows. This asserts both halves of that: the
-    filter is still broken, and the workaround still finds them.
+    ``geo.countries(continent="NA")`` used to return nothing: pandas read the
+    literal ``NA`` in the reference CSV as *not-a-number*, so every North
+    American country arrived with ``continent: null`` and the server-side filter
+    matched zero rows. ``compose.north_america_countries()`` existed to work
+    around exactly that by downloading everything and filtering client side.
+
+    The backend was fixed, so the interesting assertion flipped: the two must now
+    agree. If the filter regresses to zero rows this fails here, while the
+    compose method — which still accepts the historical ``null``/``""`` spellings
+    — keeps answering correctly for callers.
     """
 
     countries = sky.compose.north_america_countries()
     codes = {country.code for country in countries if country.code}
 
     filtered = sky.geo.countries(continent="NA")
+    filtered_codes = {country.code for country in filtered.countries if country.code}
 
     _report(
         "compose.north_america_countries",
         f"{len(countries)} countries, e.g. {sorted(codes)[:8]}",
-        f"geo.countries(continent='NA') still returns total={filtered.total} "
-        "(backend defect: pandas reads 'NA' as NaN)",
+        f"geo.countries(continent='NA') returns total={filtered.total} "
+        "(the pandas NA-as-NaN defect is fixed)",
     )
 
     assert 35 <= len(countries) <= 60, (
@@ -404,6 +411,12 @@ def test_compose_north_america_workaround_returns_the_missing_continent(sky: Sky
     assert {"US", "CA", "MX"} <= codes
     # None of them is in Europe or South America — the predicate is not a pass-through.
     assert "GB" not in codes and "BR" not in codes
+
+    assert filtered.total == len(filtered.countries)
+    assert filtered_codes == codes, (
+        "the server-side continent filter and the client-side one disagree: "
+        f"only-server={sorted(filtered_codes - codes)} only-client={sorted(codes - filtered_codes)}"
+    )
 
 
 # ── 7. adsb.iter_aircraft ────────────────────────────────────────────────────

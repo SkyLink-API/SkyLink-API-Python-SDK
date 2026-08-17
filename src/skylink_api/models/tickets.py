@@ -13,7 +13,9 @@ Three things about this payload are load-bearing and are reflected in the types:
    09:00 departure from London into 09:00Z. They stay ``str``.
 3. **``price_usd`` is not guaranteed to be USD.** ``_to_usd()`` returns the
    original amount rounded when the FX rate lookup fails, without flagging it.
-   Compare against ``original_currency`` before trusting the number.
+   Compare against ``original_currency`` before trusting the number — which is
+   now possible: ``original_price``/``original_currency`` are emitted since the
+   2026-08 backend release, having previously been documented but absent.
 """
 
 from __future__ import annotations
@@ -105,17 +107,22 @@ class TicketOffer(SkyLinkModel):
     """
 
     original_price: Number | None = None
-    """Price as quoted upstream, before conversion.
+    """Price as quoted upstream, before conversion to USD.
 
-    Documented in the endpoint's OpenAPI example but **not emitted by the
-    current ticket service** (``services/v31/tickets_service.py`` builds each
-    offer from ``price_usd``/``total_duration_min``/``stops``/``legs``/
-    ``layovers`` only). Treat it as usually absent.
+    .. versionchanged:: 0.2.0
+       Used to be documented in the endpoint's OpenAPI example but never emitted.
+       The ticket service now sends it; verified live on 2026-08-15
+       (``JFK→LAX``: ``price_usd=168.52``, ``original_price=137.0``,
+       ``original_currency="CHF"``). Still optional — an offer already quoted in
+       USD has nothing to convert.
     """
 
     original_currency: str | None = None
-    """ISO 4217 code of :attr:`original_price` (``"EUR"``). Same caveat: part of
-    the documented example, not of the live payload."""
+    """ISO 4217 code of :attr:`original_price` (``"CHF"``).
+
+    Together with :attr:`original_price` this is how you tell a genuinely
+    converted price from the passthrough described on :attr:`price_usd`.
+    """
 
     total_duration_min: int | None = None
     """Door-to-door duration including layovers, in minutes."""
@@ -156,7 +163,13 @@ class TicketSearchResponse(SkyLinkModel):
     """Passenger count the search was run with."""
 
     count: int = 0
-    """Number of offers in :attr:`flights`. Capped at 15 by the API."""
+    """Number of offers in :attr:`flights`.
+
+    Note:
+        No longer capped at 15 — a ``JFK→LAX`` search returned 111 offers on
+        2026-08-15, a ``LHR→JFK`` one 120. Page or slice on your side if you are
+        rendering them; do not assume the list is short.
+    """
 
     flights: list[TicketOffer] = Field(default_factory=list)
     """Empty when no fares were found — a normal ``200``, not a 404."""

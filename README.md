@@ -266,6 +266,22 @@ Either the airport pair **or** a `callsign` (which the API resolves to a route) 
 `format` is `"json" | "markdown" | "plain_text" | "html"`; the overload makes the static type
 follow the argument. Text formats arrive inside a JSON envelope which the SDK unwraps.
 
+> **These are the slowest calls in the SDK.** A briefing is composed by a language model over
+> both airports' weather and NOTAMs: measured live on 2026-08-15, `flight()` took 30–85 s and
+> `pdf()` about 50 s. Both therefore run with their own 180 s read timeout
+> (`skylink_api._constants.BRIEFING_TIMEOUT`) instead of the client-wide 30 s default — under
+> that default a perfectly healthy request aborts, gets retried three times, and fails after
+> two minutes. It is a default, not a ceiling: cap it yourself when a slow page is worse than
+> no briefing.
+>
+> ```python
+> sky.briefing.flight(
+>     origin="KJFK",
+>     destination="KLAX",
+>     request_options={"timeout": 60.0, "max_retries": 0},
+> )
+> ```
+
 ### `sky.routes`
 
 | Method | Endpoint | Returns |
@@ -285,6 +301,11 @@ follow the argument. Text formats arrive inside a JSON envelope which the SDK un
 | `search(*, origin, destination, date=None, passengers=1)` | `GET /tickets/search` | `TicketSearchResponse` |
 
 `date` accepts `date`/`datetime`/`str` and is sent as `YYYY-MM-DD`.
+
+Offers are cheapest first and there is **no small cap** — a busy city pair returns 100+, so
+slice before rendering. `price_usd` is the converted total; `original_price` and
+`original_currency` carry the upstream quote (e.g. `137.0 CHF` behind `168.52`) and are how
+you spot the case where conversion failed and `price_usd` is silently *not* USD.
 
 ### `sky.webhooks`
 
@@ -398,7 +419,7 @@ print(brief.errors)          # {'delays': NotFoundError(...)} — EGLL is not an
 | `compose.route_brief(origin, destination, *, include=None, exclude=None, aircraft_type=None, passengers=None)` | `RouteBrief` | distance, block time, both ends' weather, CO2 |
 | `compose.enrich_adsb(states, *, concurrency=5, max_lookups=50, photos=False)` | `list[EnrichedAircraft]` | joins live contacts with the airframe registry, memoised per `icao24` |
 | `compose.schedules_with_status(icao, *, direction="departures", limit=10, concurrency=5)` | `list[ScheduleWithStatus]` | board rows plus each flight's live status |
-| `compose.north_america_countries()` | `list[Country]` | **backend-bug workaround**, see below |
+| `compose.north_america_countries()` | `list[Country]` | the 41 NA countries, tolerant of every spelling the API has used |
 
 `include=` is the exact set of parts to request (so an unwanted part costs no quota),
 `exclude=` subtracts from the full set; passing both is a `ValueError`, and the part names are
@@ -406,11 +427,13 @@ the result's own field names (`AIRPORT_BRIEF_PARTS`, `FLIGHT_BRIEF_PARTS`, `ROUT
 in `skylink_api.resources.compose`). A part that was never requested is `None` with **no**
 entry in `errors`, so "not asked for" and "asked for and failed" stay distinguishable.
 
-> `north_america_countries()` exists because `geo.countries(continent="NA")` returns nothing:
-> the backend reads its CSV with pandas, which parses the literal `NA` as *not-a-number*, so
-> every North American country arrives with `continent: null`. The method fetches the full
-> list and returns the rows whose continent is empty (or already `"NA"`, so it keeps working
-> once the backend is fixed). Same warning is attached to the `CONTINENTS` constant.
+> `north_america_countries()` was written because `geo.countries(continent="NA")` used to
+> return nothing: the backend read its CSV with pandas, which parses the literal `NA` as
+> *not-a-number*, so every North American country arrived with `continent: null`. **That is
+> fixed** — as of 2026-08-15 the filter returns the 41 countries (and `geo.regions` 440
+> regions) directly, and that is the call to prefer. The method stays because it is public
+> API and because it accepts the old `null`/`""` spellings as well as `"NA"`, so it answers
+> correctly against an older deployment; the price is a full ~250-row download.
 
 ### Iterators and pollers
 

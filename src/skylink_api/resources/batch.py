@@ -30,7 +30,8 @@ duplicated here.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from functools import partial
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast, overload
 
 from .._exceptions import SkyLinkError
 from .._types import RequestOptions, RequestSpec
@@ -39,7 +40,7 @@ from ..helpers.idents import classify_airport_code
 from ..models.airports import EnrichedAirport
 from ..models.flight_status import FlightStatusResponse
 from ..models.notams import NotamsResponse
-from ..models.weather import Metar, Taf
+from ..models.weather import Metar, MetarWithParsed, Taf, TafWithParsed
 from .airports import _search_spec
 from .flight_status import _flight_status_spec
 from .notams import _by_airport_spec
@@ -147,23 +148,56 @@ class Batch:
         outcomes = map_concurrent(call, keys, concurrency=concurrency)
         return _collect(keys, outcomes)
 
+    @overload
     def metars(
         self,
         icaos: Iterable[str],
         *,
+        parsed: Literal[False] = False,
         concurrency: int = DEFAULT_CONCURRENCY,
         request_options: RequestOptions | None = None,
-    ) -> dict[str, Metar | SkyLinkError]:
+    ) -> dict[str, Metar | SkyLinkError]: ...
+
+    @overload
+    def metars(
+        self,
+        icaos: Iterable[str],
+        *,
+        parsed: Literal[True],
+        concurrency: int = DEFAULT_CONCURRENCY,
+        request_options: RequestOptions | None = None,
+    ) -> dict[str, MetarWithParsed | SkyLinkError]: ...
+
+    def metars(
+        self,
+        icaos: Iterable[str],
+        *,
+        parsed: bool = False,
+        concurrency: int = DEFAULT_CONCURRENCY,
+        request_options: RequestOptions | None = None,
+    ) -> dict[str, Any]:
         """METARs for many airports — ``GET /weather/metar/{icao}`` per code.
 
         Args:
             icaos: 4-letter ICAO codes. IATA codes are not accepted by the
                 endpoint and come back as errors in the result.
+            parsed: Also return the decoded block, exactly as
+                :meth:`sky.weather.metar(parsed=True)
+                <skylink_api.resources.weather.Weather.metar>` does. **Pass this
+                whenever the results feed** :mod:`skylink_api.helpers.weather`:
+                :func:`~skylink_api.helpers.weather.flight_category`,
+                :func:`~skylink_api.helpers.weather.ceiling_ft` and the unit
+                parsers all read decoded fields and never re-parse the raw text,
+                so on a plain :class:`~skylink_api.models.weather.Metar` they can
+                only answer ``None``. Colouring a board of airports by flight
+                category is the main reason to batch METARs, which makes this the
+                usual choice.
             concurrency: Simultaneous requests, default 5 (RapidAPI quotas).
             request_options: Per-request overrides applied to **every** call.
 
         Returns:
-            ``{code: Metar | SkyLinkError}`` keyed by the code exactly as given.
+            ``{code: Metar | SkyLinkError}`` keyed by the code exactly as given —
+            or ``{code: MetarWithParsed | SkyLinkError}`` when ``parsed=True``.
             A station that reports no current METAR is a
             :class:`~skylink_api.NotFoundError` value, not a missing key.
 
@@ -173,34 +207,58 @@ class Batch:
 
         return self._run(
             icaos,
-            _metar_spec,
+            partial(_metar_spec, parsed=parsed),
             concurrency=concurrency,
             request_options=request_options,
         )
+
+    @overload
+    def tafs(
+        self,
+        icaos: Iterable[str],
+        *,
+        parsed: Literal[False] = False,
+        concurrency: int = DEFAULT_CONCURRENCY,
+        request_options: RequestOptions | None = None,
+    ) -> dict[str, Taf | SkyLinkError]: ...
+
+    @overload
+    def tafs(
+        self,
+        icaos: Iterable[str],
+        *,
+        parsed: Literal[True],
+        concurrency: int = DEFAULT_CONCURRENCY,
+        request_options: RequestOptions | None = None,
+    ) -> dict[str, TafWithParsed | SkyLinkError]: ...
 
     def tafs(
         self,
         icaos: Iterable[str],
         *,
+        parsed: bool = False,
         concurrency: int = DEFAULT_CONCURRENCY,
         request_options: RequestOptions | None = None,
-    ) -> dict[str, Taf | SkyLinkError]:
+    ) -> dict[str, Any]:
         """TAFs for many airports — ``GET /weather/taf/{icao}`` per code.
 
         Args:
             icaos: 4-letter ICAO codes.
+            parsed: Also return the decoded forecast periods — see
+                :meth:`metars` for why the derived-weather helpers need this.
             concurrency: Simultaneous requests, default 5.
             request_options: Per-request overrides applied to every call.
 
         Returns:
-            ``{code: Taf | SkyLinkError}``. Many small fields issue METAR only,
-            so a 404 here is normal and expected — hence the per-key error rather
-            than an exception.
+            ``{code: Taf | SkyLinkError}``, or ``{code: TafWithParsed |
+            SkyLinkError}`` when ``parsed=True``. Many small fields issue METAR
+            only, so a 404 here is normal and expected — hence the per-key error
+            rather than an exception.
         """
 
         return self._run(
             icaos,
-            _taf_spec,
+            partial(_taf_spec, parsed=parsed),
             concurrency=concurrency,
             request_options=request_options,
         )
@@ -336,53 +394,101 @@ class AsyncBatch:
         outcomes = await amap_concurrent(call, keys, concurrency=concurrency)
         return _collect(keys, outcomes)
 
+    @overload
     async def metars(
         self,
         icaos: Iterable[str],
         *,
+        parsed: Literal[False] = False,
         concurrency: int = DEFAULT_CONCURRENCY,
         request_options: RequestOptions | None = None,
-    ) -> dict[str, Metar | SkyLinkError]:
+    ) -> dict[str, Metar | SkyLinkError]: ...
+
+    @overload
+    async def metars(
+        self,
+        icaos: Iterable[str],
+        *,
+        parsed: Literal[True],
+        concurrency: int = DEFAULT_CONCURRENCY,
+        request_options: RequestOptions | None = None,
+    ) -> dict[str, MetarWithParsed | SkyLinkError]: ...
+
+    async def metars(
+        self,
+        icaos: Iterable[str],
+        *,
+        parsed: bool = False,
+        concurrency: int = DEFAULT_CONCURRENCY,
+        request_options: RequestOptions | None = None,
+    ) -> dict[str, Any]:
         """METARs for many airports — ``GET /weather/metar/{icao}`` per code.
 
         Args:
             icaos: 4-letter ICAO codes.
+            parsed: Also return the decoded block. Required by everything in
+                :mod:`skylink_api.helpers.weather` — see :meth:`Batch.metars`.
             concurrency: Simultaneous requests, default 5 (RapidAPI quotas).
             request_options: Per-request overrides applied to every call.
 
         Returns:
-            ``{code: Metar | SkyLinkError}`` keyed by the code exactly as given.
+            ``{code: Metar | SkyLinkError}`` keyed by the code exactly as given,
+            or ``{code: MetarWithParsed | SkyLinkError}`` with ``parsed=True``.
         """
 
         return await self._run(
             icaos,
-            _metar_spec,
+            partial(_metar_spec, parsed=parsed),
             concurrency=concurrency,
             request_options=request_options,
         )
+
+    @overload
+    async def tafs(
+        self,
+        icaos: Iterable[str],
+        *,
+        parsed: Literal[False] = False,
+        concurrency: int = DEFAULT_CONCURRENCY,
+        request_options: RequestOptions | None = None,
+    ) -> dict[str, Taf | SkyLinkError]: ...
+
+    @overload
+    async def tafs(
+        self,
+        icaos: Iterable[str],
+        *,
+        parsed: Literal[True],
+        concurrency: int = DEFAULT_CONCURRENCY,
+        request_options: RequestOptions | None = None,
+    ) -> dict[str, TafWithParsed | SkyLinkError]: ...
 
     async def tafs(
         self,
         icaos: Iterable[str],
         *,
+        parsed: bool = False,
         concurrency: int = DEFAULT_CONCURRENCY,
         request_options: RequestOptions | None = None,
-    ) -> dict[str, Taf | SkyLinkError]:
+    ) -> dict[str, Any]:
         """TAFs for many airports — ``GET /weather/taf/{icao}`` per code.
 
         Args:
             icaos: 4-letter ICAO codes.
+            parsed: Also return the decoded forecast periods — see
+                :meth:`Batch.metars`.
             concurrency: Simultaneous requests, default 5.
             request_options: Per-request overrides applied to every call.
 
         Returns:
-            ``{code: Taf | SkyLinkError}``; a field that issues no TAF is a 404
-            value, which is normal.
+            ``{code: Taf | SkyLinkError}``, or ``{code: TafWithParsed |
+            SkyLinkError}`` with ``parsed=True``; a field that issues no TAF is a
+            404 value, which is normal.
         """
 
         return await self._run(
             icaos,
-            _taf_spec,
+            partial(_taf_spec, parsed=parsed),
             concurrency=concurrency,
             request_options=request_options,
         )

@@ -32,7 +32,7 @@ from ._response import (
     parse_rate_limit,
     parse_retry_after,
 )
-from ._types import RequestOptions, RequestSpec
+from ._types import NotGiven, RequestOptions, RequestSpec
 from .helpers.cache import CacheProtocol, cache_key, operation_name
 
 __all__ = ["AsyncAPIClient", "BaseClient", "SyncAPIClient"]
@@ -193,8 +193,14 @@ class BaseClient:
         }
         if spec.json_body is not None:
             kwargs["json"] = spec.json_body
+        # Precedence: the caller's per-call timeout, then the endpoint's own
+        # default (``/briefing/*`` only), then the client-wide one httpx already
+        # holds. An explicit ``request_options={"timeout": ...}`` always wins,
+        # including when it is ``None`` (= no timeout).
         if options is not None and "timeout" in options:
             kwargs["timeout"] = options["timeout"]
+        elif not isinstance(spec.timeout, NotGiven):
+            kwargs["timeout"] = spec.timeout
         return kwargs
 
     # ── retry policy ─────────────────────────────────────────────────────────

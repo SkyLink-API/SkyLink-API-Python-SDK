@@ -74,8 +74,9 @@ class Tickets:
     ) -> TicketSearchResponse:
         """Search one-way fares — ``GET /tickets/search``.
 
-        Results are sorted cheapest first, capped at 15 offers, and cached by
-        the API for an hour.
+        Results are sorted cheapest first and cached by the API for an hour.
+        There is no small cap on the number of offers — searches on busy city
+        pairs come back with 100+.
 
         Args:
             origin: **IATA** code, 3 letters (``"LHR"``). ICAO is rejected.
@@ -141,8 +142,9 @@ class AsyncTickets:
     ) -> TicketSearchResponse:
         """Search one-way fares — ``GET /tickets/search``.
 
-        Results are sorted cheapest first, capped at 15 offers, and cached by
-        the API for an hour.
+        Results are sorted cheapest first and cached by the API for an hour.
+        There is no small cap on the number of offers — searches on busy city
+        pairs come back with 100+.
 
         Args:
             origin: **IATA** code, 3 letters (``"LHR"``). ICAO is rejected.

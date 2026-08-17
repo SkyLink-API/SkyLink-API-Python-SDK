@@ -25,10 +25,11 @@ from skylink_api._exceptions import (
     SkyLinkError,
     UnprocessableEntityError,
 )
+from skylink_api.helpers.weather import flight_category
 from skylink_api.models.airports import EnrichedAirport
 from skylink_api.models.flight_status import FlightStatusResponse
 from skylink_api.models.notams import NotamsResponse
-from skylink_api.models.weather import Metar, Taf
+from skylink_api.models.weather import Metar, MetarWithParsed, Taf, TafWithParsed
 from skylink_api.resources.batch import AsyncBatch, Batch, _airport_spec, _unique
 
 
@@ -148,6 +149,57 @@ def test_metars_forwards_request_options(batch: Batch, respx_mock: respx.MockRou
     batch.metars(["KJFK"], request_options={"headers": {"X-Trace": "abc"}})
 
     assert route.calls.last.request.headers["x-trace"] == "abc"
+
+
+def test_metars_do_not_ask_for_the_decoded_block_by_default(
+    batch: Batch, respx_mock: respx.MockRouter
+) -> None:
+    route = _metar_route(
+        respx_mock, "KJFK", return_value=httpx.Response(200, json=load_fixture("weather_metar"))
+    )
+
+    results = batch.metars(["KJFK"])
+
+    assert route.calls.last.request.url.params["parsed"] == "false"
+    assert type(results["KJFK"]) is Metar
+
+
+def test_metars_parsed_true_returns_the_decoded_block(
+    batch: Batch, respx_mock: respx.MockRouter
+) -> None:
+    """``parsed=True`` is what makes a batch usable by ``helpers.weather``.
+
+    Without it every derived value (flight category, ceiling, altimeter unit)
+    can only answer ``None``, because those helpers read decoded fields and
+    never re-parse the raw report.
+    """
+
+    route = _metar_route(
+        respx_mock,
+        "KJFK",
+        return_value=httpx.Response(200, json=load_fixture("weather_metar_parsed")),
+    )
+
+    results = batch.metars(["KJFK"], parsed=True)
+
+    assert route.calls.last.request.url.params["parsed"] == "true"
+    report = results["KJFK"]
+    assert isinstance(report, MetarWithParsed)
+    assert report.parsed is not None
+    assert flight_category(report) is not None
+
+
+def test_tafs_parsed_true_returns_the_decoded_periods(
+    batch: Batch, respx_mock: respx.MockRouter
+) -> None:
+    route = respx_mock.get(f"{TEST_BASE_URL}/weather/taf/EGLL").mock(
+        return_value=httpx.Response(200, json=load_fixture("weather_taf_parsed"))
+    )
+
+    results = batch.tafs(["EGLL"], parsed=True)
+
+    assert route.calls.last.request.url.params["parsed"] == "true"
+    assert isinstance(results["EGLL"], TafWithParsed)
 
 
 def test_metars_all_failing_still_returns_every_key(
