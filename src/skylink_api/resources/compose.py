@@ -469,15 +469,17 @@ def _flight_carbon_spec(
 
 
 def _is_north_american(country: Country) -> bool:
-    """The ``continent is NaN`` workaround, as a predicate.
+    """Is this row North America? Tolerant of every spelling the API has used.
 
     See :meth:`Compose.north_america_countries`. Three spellings count:
 
-    * ``None`` — what the backend sends today (``_convert_value`` turns the
-      pandas ``NaN`` into ``null``);
-    * ``""`` — what a CSV read with ``keep_default_na=False`` would send;
-    * ``"NA"`` — the correct value, so the day the backend is fixed this method
-      keeps returning the same 41 countries instead of an empty list.
+    * ``"NA"`` — what the backend sends today, and the correct value;
+    * ``None`` — what it sent until the 2026-08 release, when the reference CSV
+      was still read with pandas' default ``NA``-as-*not-a-number* coercion;
+    * ``""`` — the other shape a fixed CSV loader could produce.
+
+    Keeping the two historical spellings costs nothing and means the method
+    answers correctly against an older deployment instead of returning ``[]``.
     """
 
     continent = country.continent
@@ -926,14 +928,7 @@ class Compose:
         *,
         request_options: RequestOptions | None = None,
     ) -> list[Country]:
-        """The 41 North American countries — a workaround for a backend bug.
-
-        ``geo.countries(continent="NA")`` returns **nothing**. The reference CSV
-        is read with pandas, which parses the literal ``NA`` as *not-a-number*, so
-        every North American country arrives with ``continent: null`` and the
-        server-side filter matches zero rows. This fetches the full list (one
-        request, ~250 rows) and returns the countries whose continent is empty —
-        which is exactly the missing continent::
+        """The 41 North American countries, whatever the backend calls them::
 
             for country in sky.compose.north_america_countries():
                 print(country.code, country.name)
@@ -942,18 +937,25 @@ class Compose:
             request_options: Per-request overrides.
 
         Returns:
-            Countries whose ``continent`` is empty **or** already ``"NA"``, in
-            the API's own order — so this keeps working, rather than silently
-            returning nothing, on the day the backend is fixed.
+            Countries whose ``continent`` is ``"NA"`` — or empty, the shape older
+            deployments sent — in the API's own order.
 
         Note:
-            **TODO: delete this method when the backend is fixed** (read the CSV
-            with ``keep_default_na=False``, or filter on ``NaN`` for ``"NA"``).
-            At that point ``geo.countries(continent="NA")`` starts working and
-            this becomes a needless full download. Recorded in
-            ``.claude/plan/research/04-live-verification.md``, "Подтверждённые
-            гипотезы"; the same warning is on
-            :data:`skylink_api.CONTINENTS`.
+            This began as a workaround. ``geo.countries(continent="NA")`` used to
+            return nothing, because the reference CSV was read with pandas, which
+            parses the literal ``NA`` as *not-a-number*; every North American
+            country therefore arrived with ``continent: null`` and the
+            server-side filter matched zero rows.
+
+            **That backend bug is fixed** — as of 2026-08-15
+            ``geo.countries(continent="NA")`` returns the same 41 countries in
+            one small response, and it is the call to reach for. This method is
+            kept because it is public API and because it still answers correctly
+            against a deployment that predates the fix; the cost is that it
+            downloads all ~250 countries and filters client side.
+
+        See Also:
+            :meth:`skylink_api.resources.geo.Geo.countries` — the direct route.
         """
 
         response = cast(CountriesResponse, self._client.execute(_countries_spec(), request_options))
@@ -1319,10 +1321,11 @@ class AsyncCompose:
         *,
         request_options: RequestOptions | None = None,
     ) -> list[Country]:
-        """The 41 North American countries — a workaround for a backend bug.
+        """The 41 North American countries, whatever the backend calls them.
 
-        Async twin of :meth:`Compose.north_america_countries`, including the
-        **TODO: delete when the backend stops reading ``NA`` as ``NaN``**::
+        Async twin of :meth:`Compose.north_america_countries` — including its
+        note that the backend bug this once worked around is fixed, and that
+        ``geo.countries(continent="NA")`` is now the cheaper route::
 
             countries = await sky.compose.north_america_countries()
 

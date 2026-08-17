@@ -8,12 +8,19 @@ Two mechanics that no other namespace needs:
   type follow the argument.
 * :meth:`Briefing.pdf` is the API's only binary endpoint, so its spec sets
   ``response_kind="bytes"`` and the method returns ``bytes``.
+
+Both carry their own read timeout. A briefing is written by a language model over
+the weather and NOTAMs of two airports and takes tens of seconds — well past the
+client-wide 30 s default — so every spec here sets
+:data:`~skylink_api._constants.BRIEFING_TIMEOUT`. It is a *default*, not a
+ceiling: ``request_options={"timeout": ...}`` still wins.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
+from .._constants import BRIEFING_TIMEOUT
 from .._types import RequestOptions, RequestSpec
 from ..models.briefing import FlightBriefing, FlightBriefingText
 
@@ -60,6 +67,7 @@ def _flight_spec(
             "format": format,
         },
         cast_to=FlightBriefing if format == "json" else FlightBriefingText,
+        timeout=BRIEFING_TIMEOUT,
     )
 
 
@@ -80,6 +88,7 @@ def _pdf_spec(
             "flight_number": flight_number,
         },
         response_kind="bytes",
+        timeout=BRIEFING_TIMEOUT,
     )
 
 
@@ -171,6 +180,25 @@ class Briefing:
             In the structured form, ``origin_briefing.notams`` /
             ``.pireps`` are ``None`` (not ``[]``) whenever the matching
             ``include_*`` flag was ``False``.
+
+        Warning:
+            **This is the slowest call in the SDK.** The briefing is written by a
+            language model over both airports' weather and NOTAMs; measured live
+            on 2026-08-15 it took 30-85 s depending on ``format``. The method
+            therefore raises its own read timeout to
+            :data:`~skylink_api._constants.BRIEFING_TIMEOUT` (180 s) instead of
+            the client's 30 s default — otherwise a perfectly healthy request
+            times out, gets retried three times, and fails after two minutes.
+
+            Retries are *not* disabled, because a real 503 should still be
+            retried. In a request/response context where two minutes is too long
+            to wait, cap it yourself::
+
+                sky.briefing.flight(
+                    origin="KJFK",
+                    destination="KLAX",
+                    request_options={"timeout": 90.0, "max_retries": 0},
+                )
 
         Raises:
             BadRequestError: all three ``include_*`` flags are ``False`` (400).
@@ -306,6 +334,25 @@ class AsyncBriefing:
             In the structured form, ``origin_briefing.notams`` /
             ``.pireps`` are ``None`` (not ``[]``) whenever the matching
             ``include_*`` flag was ``False``.
+
+        Warning:
+            **This is the slowest call in the SDK.** The briefing is written by a
+            language model over both airports' weather and NOTAMs; measured live
+            on 2026-08-15 it took 30-85 s depending on ``format``. The method
+            therefore raises its own read timeout to
+            :data:`~skylink_api._constants.BRIEFING_TIMEOUT` (180 s) instead of
+            the client's 30 s default — otherwise a perfectly healthy request
+            times out, gets retried three times, and fails after two minutes.
+
+            Retries are *not* disabled, because a real 503 should still be
+            retried. In a request/response context where two minutes is too long
+            to wait, cap it yourself::
+
+                sky.briefing.flight(
+                    origin="KJFK",
+                    destination="KLAX",
+                    request_options={"timeout": 90.0, "max_retries": 0},
+                )
 
         Raises:
             BadRequestError: all three ``include_*`` flags are ``False`` (400).

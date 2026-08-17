@@ -26,7 +26,13 @@ from skylink_api import (
     SkyLink,
 )
 from skylink_api._config import mask_api_key
-from skylink_api._constants import DEFAULT_MAX_RETRIES, DIRECT_BASE_URL, RAPIDAPI_BASE_URL
+from skylink_api._constants import (
+    BRIEFING_TIMEOUT,
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_TIMEOUT,
+    DIRECT_BASE_URL,
+    RAPIDAPI_BASE_URL,
+)
 from skylink_api.models.geo import Country
 
 METAR = {"raw": "KJFK 271851Z 28014KT 10SM FEW045 22/09 A3002", "icao": "KJFK"}
@@ -116,6 +122,40 @@ def test_with_options_overrides_and_leaves_the_original_alone(sleeper: SleepReco
         assert (sky.max_retries, sky.history_plan) == (DEFAULT_MAX_RETRIES, "ultra")
         assert clone.api_key == sky.api_key
         assert clone.provider == sky.provider
+
+
+def test_with_options_timeout_reaches_the_wire(
+    respx_mock: respx.MockRouter, sleeper: SleepRecorder
+) -> None:
+    """The clone shares the parent's pool, whose baked-in timeout would otherwise
+    silently win — the clone's timeout must be sent with every request."""
+
+    route = respx_mock.get(f"{TEST_BASE_URL}/weather/metar/KJFK").mock(
+        return_value=httpx.Response(200, json=METAR)
+    )
+    with _client(sleeper) as sky:
+        sky.with_options(timeout=120.0).weather.metar("KJFK")
+
+    assert route.calls.last.request.extensions["timeout"] == httpx.Timeout(120.0).as_dict()
+
+
+def test_a_callers_http_client_keeps_its_own_timeout(
+    respx_mock: respx.MockRouter, sleeper: SleepRecorder
+) -> None:
+    """Bring-your-own ``http_client`` stays authoritative for the timeout unless
+    an explicit ``timeout`` is also given, which must then win."""
+
+    route = respx_mock.get(f"{TEST_BASE_URL}/weather/metar/KJFK").mock(
+        return_value=httpx.Response(200, json=METAR)
+    )
+
+    with _client(sleeper, http_client=httpx.Client(timeout=7.0)) as sky:
+        sky.weather.metar("KJFK")
+    assert route.calls.last.request.extensions["timeout"] == httpx.Timeout(7.0).as_dict()
+
+    with _client(sleeper, http_client=httpx.Client(timeout=7.0), timeout=3.0) as sky:
+        sky.weather.metar("KJFK")
+    assert route.calls.last.request.extensions["timeout"] == httpx.Timeout(3.0).as_dict()
 
 
 def test_with_options_reuses_the_transport(sleeper: SleepRecorder) -> None:
@@ -266,6 +306,71 @@ async def test_async_with_options(respx_mock: respx.MockRouter, async_sleeper: A
         await clone.aclose()
         assert not sky.http_client.is_closed
         assert (await sky.weather.metar("KJFK")).icao == "KJFK"
+
+
+# ── per-endpoint timeout defaults ────────────────────────────────────────────
+
+
+def _sent_timeout(route: respx.Route) -> dict[str, float | None]:
+    """The timeout httpx actually attached to the last request."""
+
+    return dict(route.calls.last.request.extensions["timeout"])
+
+
+def test_a_spec_timeout_overrides_the_client_default(
+    sleeper: SleepRecorder, respx_mock: respx.MockRouter
+) -> None:
+    """``/briefing/*`` is far slower than 30 s; its spec says so, and it is used.
+
+    Without this the endpoint is unusable out of the box: a healthy briefing
+    takes 30-85 s, so the default read timeout aborts it, the abort is retried
+    three times, and the caller waits two minutes for a failure.
+    """
+
+    route = respx_mock.get(f"{TEST_BASE_URL}/briefing/flight").mock(
+        return_value=httpx.Response(200, json={"origin": "KJFK", "destination": "EGLL"})
+    )
+
+    with _client(sleeper) as sky:
+        sky.briefing.flight(origin="KJFK", destination="EGLL")
+
+    assert _sent_timeout(route)["read"] == BRIEFING_TIMEOUT.read
+    assert BRIEFING_TIMEOUT.read != DEFAULT_TIMEOUT.read
+
+
+def test_request_options_still_beat_the_spec_timeout(
+    sleeper: SleepRecorder, respx_mock: respx.MockRouter
+) -> None:
+    """The spec default is a default, not a ceiling — the caller has the last word."""
+
+    route = respx_mock.get(f"{TEST_BASE_URL}/briefing/flight").mock(
+        return_value=httpx.Response(200, json={"origin": "KJFK", "destination": "EGLL"})
+    )
+
+    with _client(sleeper) as sky:
+        sky.briefing.flight(
+            origin="KJFK",
+            destination="EGLL",
+            request_options={"timeout": 7.0},
+        )
+
+    assert _sent_timeout(route)["read"] == 7.0
+
+
+def test_endpoints_without_a_spec_timeout_keep_the_client_one(
+    sleeper: SleepRecorder, respx_mock: respx.MockRouter
+) -> None:
+    """Only the briefing routes opt out; everything else inherits the client's."""
+
+    route = respx_mock.get(f"{TEST_BASE_URL}/weather/metar/KJFK").mock(
+        return_value=httpx.Response(200, json=METAR)
+    )
+
+    with _client(sleeper, timeout=11.0) as sky:
+        sky.weather.metar("KJFK")
+
+    # httpx resolves a bare float into every phase of the client's own Timeout.
+    assert _sent_timeout(route)["read"] == 11.0
 
 
 # ── reprs ────────────────────────────────────────────────────────────────────

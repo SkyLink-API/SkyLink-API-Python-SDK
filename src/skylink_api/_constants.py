@@ -40,6 +40,19 @@ RAPIDAPI_HOST_HEADER: Final = "X-RapidAPI-Host"
 # ── Defaults ─────────────────────────────────────────────────────────────────
 
 DEFAULT_TIMEOUT: Final = httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0)
+
+#: Read timeout for ``/briefing/*``, the one family the 30 s default is wrong for.
+#:
+#: The briefings are composed by a language model over METAR, TAF, NOTAMs and
+#: (optionally) PIREPs for both airports. Measured against the live API on
+#: 2026-08-15: ``format="json"`` took 38-58 s, ``markdown`` 30-50 s and
+#: ``plain_text`` up to 85 s. Under :data:`DEFAULT_TIMEOUT` every one of those is
+#: an :class:`~skylink_api.APITimeoutError` — and because a timeout is retried,
+#: the caller waits ~120 s to be told a working endpoint failed.
+#:
+#: Applied as the *spec* default (:attr:`skylink_api._types.RequestSpec.timeout`),
+#: so ``request_options={"timeout": ...}`` still overrides it.
+BRIEFING_TIMEOUT: Final = httpx.Timeout(connect=5.0, read=180.0, write=30.0, pool=5.0)
 DEFAULT_MAX_RETRIES: Final = 3
 DEFAULT_PROVIDER: Final[Literal["rapidapi"]] = "rapidapi"
 DEFAULT_HISTORY_PLAN: Final[Literal["ultra"]] = "ultra"
@@ -93,16 +106,14 @@ WEBHOOK_EVENTS: Final[tuple[str, ...]] = (
 #: Continent codes accepted by ``geo.countries()`` and ``geo.regions()`` —
 #: ``_VALID_CONTINENTS`` in the backend's ``routers/v3/countries.py``.
 #:
-#: .. warning::
-#:    ``"NA"`` (North America) is accepted by the API but **resolves to nothing**:
-#:    the backend reads its reference CSV with pandas, which parses the literal
-#:    ``NA`` as *not-a-number*, so every North American country ends up with an
-#:    empty ``continent`` and the filter matches zero rows. The value is listed
-#:    here because it is a real parameter value, not because it works. Until the
-#:    backend is fixed, get North America with
-#:    ``client.compose.north_america_countries()`` (which fetches every country
-#:    and keeps the ones whose ``continent`` is empty) or apply that filter
-#:    yourself.
+#: .. versionchanged:: 0.2.0
+#:    ``"NA"`` (North America) used to be accepted but resolve to nothing: the
+#:    backend read its reference CSV with pandas, which parses the literal ``NA``
+#:    as *not-a-number*, so every North American country arrived with an empty
+#:    ``continent`` and the filter matched zero rows. The backend now loads the
+#:    CSV without that coercion; verified live on 2026-08-15,
+#:    ``geo.countries(continent="NA")`` returns 41 countries and
+#:    ``geo.regions(continent="NA")`` 440 regions.
 CONTINENTS: Final[tuple[str, ...]] = ("AF", "AN", "AS", "EU", "NA", "OC", "SA")
 
 #: History plan prefixes — the ``/{plan}/history/*`` URL segment. ``"ultra"``

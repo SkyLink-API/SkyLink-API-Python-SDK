@@ -73,12 +73,14 @@ def test_webhook_events_match_the_literal_and_the_enum() -> None:
     assert len(WEBHOOK_EVENTS) == 6
 
 
-def test_continents_match_the_literal_and_include_the_broken_one() -> None:
+def test_continents_match_the_literal() -> None:
     """``_VALID_CONTINENTS`` in ``routers/v3/countries.py``.
 
-    ``"NA"`` is listed because the API accepts it, not because it works: pandas
-    reads the literal ``NA`` as NaN, so the filter matches nothing. The workaround
-    lives in ``compose.north_america_countries()``.
+    ``"NA"`` was listed for a while because the API accepted it rather than
+    because it worked — pandas read the literal ``NA`` as NaN and the filter
+    matched nothing. Fixed backend side (verified 2026-08-15): all seven codes
+    resolve, and ``compose.north_america_countries()`` is a convenience now, not
+    a workaround.
     """
 
     assert get_args(Continent) == CONTINENTS

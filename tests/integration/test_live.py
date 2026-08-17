@@ -110,23 +110,38 @@ def test_weather_metar_parses(sky: SkyLink) -> None:
             assert isinstance(report.parsed.clouds, list)
 
 
-@pytest.mark.xfail(
-    reason=(
-        "backend defect: GET /weather/airsigmet answers 500 for every bbox "
-        "(verified with curl, integer and float forms alike, while "
-        "/weather/pireps serves the same bbox fine). Remove this marker once "
-        "the endpoint is fixed — an XPASS is the signal that it was."
-    ),
-    strict=False,
-)
 def test_weather_airsigmet(sky: SkyLink) -> None:
-    """``GET /weather/airsigmet?bbox=`` → advisories intersecting the box."""
+    """``GET /weather/airsigmet?bbox=`` → advisories intersecting the box.
+
+    This used to be ``xfail``: the endpoint answered a bare ``500 Internal Server
+    Error`` for every bbox, integer and float alike, while ``/weather/pireps``
+    served the same box fine. Fixed backend side and verified live on
+    2026-08-15 — 12 SIGMETs over the western US — so the marker is gone and a
+    500 is a failure again.
+    """
 
     with tolerating("weather.airsigmet"):
         result = sky.weather.airsigmet(bbox=(30.0, -120.0, 45.0, -100.0))
 
         assert isinstance(result, AirSigmetResponse)
         assert result.total == len(result.reports)
+
+
+def test_weather_airsigmet_type_filter_is_echoed(sky: SkyLink) -> None:
+    """``type=`` narrows the set and comes back in ``filter_type``.
+
+    The half of the endpoint that a 500 hid completely: unfiltered the response
+    carries ``filter_type=None``, and a filtered one echoes the value it applied.
+    """
+
+    with tolerating("weather.airsigmet(type=)"):
+        bbox = (30.0, -120.0, 45.0, -100.0)
+        everything = sky.weather.airsigmet(bbox=bbox)
+        sigmets = sky.weather.airsigmet(bbox=bbox, type="sigmet")
+
+        assert everything.filter_type is None
+        assert sigmets.filter_type == "sigmet"
+        assert sigmets.total == len(sigmets.reports) <= everything.total
 
 
 # ── 2. airports ──────────────────────────────────────────────────────────────

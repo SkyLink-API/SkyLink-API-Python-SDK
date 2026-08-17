@@ -16,6 +16,7 @@ import respx
 
 from conftest import TEST_BASE_URL, load_fixture
 from skylink_api._client import AsyncSkyLink, SkyLink
+from skylink_api._constants import BRIEFING_TIMEOUT
 from skylink_api._exceptions import BadRequestError, NotFoundError, UnprocessableEntityError
 from skylink_api.models.briefing import AirportBriefing, FlightBriefing, FlightBriefingText
 from skylink_api.resources.briefing import AsyncBriefing, Briefing, _flight_spec, _pdf_spec
@@ -76,6 +77,22 @@ def test_builders_produce_the_documented_specs() -> None:
         "arrival_icao": "EGLL",
         "flight_number": None,
     }
+
+
+def test_every_briefing_spec_carries_the_long_read_timeout() -> None:
+    """A briefing takes 30-85 s live; the 30 s client default would abort it.
+
+    Both routes therefore pin :data:`BRIEFING_TIMEOUT` on the spec itself, which
+    the client uses only when the caller did not pass one.
+    """
+
+    assert _flight_spec(origin="KJFK", destination="EGLL").timeout is BRIEFING_TIMEOUT
+    assert _flight_spec(origin="KJFK", destination="EGLL", format="markdown").timeout is (
+        BRIEFING_TIMEOUT
+    )
+    assert _pdf_spec(departure_icao="KJFK", arrival_icao="EGLL").timeout is BRIEFING_TIMEOUT
+    assert BRIEFING_TIMEOUT.read is not None
+    assert BRIEFING_TIMEOUT.read > 120.0
 
 
 # ── flight (json) ────────────────────────────────────────────────────────────

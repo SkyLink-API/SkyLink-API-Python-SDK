@@ -118,6 +118,10 @@ class SkyLink(SyncAPIClient):
             environ=environ,
         )
         super().__init__(config, http_client=http_client, sleep=sleep, cache=cache)
+        # An explicit timeout must win even over a caller-supplied http_client's
+        # own configuration — otherwise it would be silently ignored.
+        if not isinstance(timeout, NotGiven):
+            self._apply_config_timeout = True
 
     @property
     def api_key(self) -> str | None:
@@ -210,6 +214,12 @@ class SkyLink(SyncAPIClient):
             sleep=self._sleep,
             cache=self._cache if isinstance(cache, NotGiven) else cache,
             owns_transport=False,
+        )
+        # The clone shares this client's pool, whose baked-in timeout would
+        # otherwise silently override the clone's — send the config value
+        # per-request whenever the parent did, or a timeout was just given.
+        clone._apply_config_timeout = self._apply_config_timeout or not isinstance(
+            timeout, NotGiven
         )
         clone._copy_hooks_from(self)
         return clone
@@ -499,6 +509,10 @@ class AsyncSkyLink(AsyncAPIClient):
             environ=environ,
         )
         super().__init__(config, http_client=http_client, sleep=sleep, cache=cache)
+        # An explicit timeout must win even over a caller-supplied http_client's
+        # own configuration — otherwise it would be silently ignored.
+        if not isinstance(timeout, NotGiven):
+            self._apply_config_timeout = True
 
     @property
     def api_key(self) -> str | None:
@@ -578,6 +592,11 @@ class AsyncSkyLink(AsyncAPIClient):
             sleep=self._sleep,
             cache=self._cache if isinstance(cache, NotGiven) else cache,
             owns_transport=False,
+        )
+        # See SkyLink.with_options: the shared pool's baked-in timeout must not
+        # silently override the clone's configured one.
+        clone._apply_config_timeout = self._apply_config_timeout or not isinstance(
+            timeout, NotGiven
         )
         clone._copy_hooks_from(self)
         return clone

@@ -5,6 +5,11 @@ default) returns a :class:`FlightBriefing` model, the three text formats return
 the rendered document as a plain ``str``. ``briefing.pdf()`` is the API's only
 binary endpoint and hands back ``bytes``.
 
+Be patient with this one: every call below takes tens of seconds (30-85 s live),
+because the document is written by a language model over both airports' weather
+and NOTAMs. The SDK gives these routes their own 180 s read timeout so the
+default 30 s one does not abort them; nothing needs configuring here.
+
 Run it with a key in the environment::
 
     export RAPIDAPI_KEY=...msh...jsn...   # or SKYLINK_API_KEY with provider="direct"
