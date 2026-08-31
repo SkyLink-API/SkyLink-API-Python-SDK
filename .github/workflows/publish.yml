@@ -27,8 +27,8 @@ jobs:
       unpublished: ${{ steps.pypi.outputs.unpublished }}
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -38,7 +38,7 @@ jobs:
       - name: Read the package version
         id: version
         run: |
-          VERSION=$(python -c "import re,pathlib; print(re.search(r'\"([^\"]+)\"', pathlib.Path('src/skylink_api/_version.py').read_text()).group(1))")
+          VERSION=$(python -c "from skylink_api._version import __version__; print(__version__)")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "package version: $VERSION"
 
