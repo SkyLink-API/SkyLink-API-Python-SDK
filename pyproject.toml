@@ -9,7 +9,7 @@ description = "Official Python SDK for the SkyLink API — aviation data: live A
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
-authors = [{ name = "SkyLink API", email = "support@skylinkapi.com" }]
+authors = [{ name = "SkyLink API", email = "hello@skylinkapi.com" }]
 keywords = [
     "skylink",
     "aviation",
